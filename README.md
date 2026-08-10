@@ -75,6 +75,7 @@ ChrisBuilds, read from the Rust port
 traveling bolt, bezier spark paths. The bolt's quadratic-decay wake and
 three-tier palette are adapted from the shimmer animation in the
 [Oh My Pi](https://github.com/oh-my-pi) coding agent. The terminal emulator
-itself is original.
+itself is original. The demo's ASCII art is a redraw of *Starry Night by
+Vincent van Gogh in ASCII* by [Veni, Vidi, ASCII](https://github.com/venividiascii), used with thanks.
 
 MIT licensed.

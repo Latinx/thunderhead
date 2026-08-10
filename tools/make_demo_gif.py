@@ -16,13 +16,10 @@ Usage: python3 tools/make_demo_gif.py [out.gif]
 
 import pty
 import os
-import re
 import sys
 import time
-import random
 import select
 import struct
-import subprocess
 import termios as T
 import fcntl
 import copy
@@ -39,6 +36,7 @@ FONT_PX = 16
 
 ART_PATH = "/tmp/thunderhead_art.txt"
 NVIM_FILE = "/tmp/thunderhead_demo.txt"
+ART_ASSET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storm_art.txt")
 
 # --- xterm 256-color approximation (16 base + 6x6x6 cube + grayscale) --------
 BASE16 = [
@@ -59,56 +57,15 @@ def xterm_rgb(n):
     return (g, g, g)
 
 
-# --- fullscreen ASCII storm art ---------------------------------------------
-def build_art():
-    rng = random.Random(20260810)
-    rows = [[" "] * COLS for _ in range(25)]
-    # clouds along the top
-    for row in range(0, 3):
-        x = 0
-        while x < COLS:
-            width = 8 + rng.randint(0, 12)
-            for i in range(min(width, COLS - x)):
-                rows[row][x + i] = "~"
-            x += width + rng.randint(4, 14)
-    # a big jagged bolt down the middle
-    bx = 62
-    for row in range(3, 22):
-        rows[row][bx] = "|"
-        if row % 2 == 1 and rng.random() < 0.6:
-            bx += 1 if rng.random() < 0.5 else -1
-        # short fork
-        if rng.random() < 0.3:
-            fdir = 1 if rng.random() < 0.5 else -1
-            for i in range(1, 5):
-                if 0 <= bx + fdir * i < COLS:
-                    rows[row][bx + fdir * i] = "-" if i % 2 == 0 else "\\" if fdir > 0 else "/"
-    # slanted rain
-    for row in range(3, 23):
-        for col in range(0, COLS, 2):
-            if col != bx and col != bx + 1 and rng.random() < 0.18:
-                rows[row][col] = "/" if rng.random() < 0.5 else "\\"
-    # ground: hills and a little town
-    rows[23] = list("_" * COLS)
-    town = "_|_|_  __|__  |_|_|_  _|_  |_|"
-    start = (COLS - len(town)) // 2
-    for i, ch in enumerate(town):
-        if 0 <= start + i < COLS:
-            rows[24][start + i] = ch
-    return "\n".join("".join(r).rstrip() for r in rows[:25])
+# --- fullscreen ASCII art ----------------------------------------------------
+# A redraw of "Starry Night by Vincent van Gogh in ASCII" by Veni, Vidi, ASCII
+# (see README credits). Kept as a repo asset so the demo shows the same piece
+# every run.
 
 
 def write_scene_files():
-    try:
-        title = subprocess.run(
-            ["figlet", "-f", "standard", "-w", str(COLS), "THUNDERHEAD"],
-            capture_output=True, text=True, check=True,
-        ).stdout.rstrip()
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        title = "T H U N D E R H E A D"
-    art = title + "\n\n" + build_art() + "\n"
-    with open(ART_PATH, "w") as f:
-        f.write(art)
+    with open(ART_ASSET) as src, open(ART_PATH, "w") as dst:
+        dst.write(src.read())
     with open(NVIM_FILE, "w") as f:
         f.write(
             "// thunderhead.rs — the storm lives in your terminal\n"
