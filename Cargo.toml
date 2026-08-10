@@ -1,0 +1,9 @@
+[package]
+name = "stormterm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libc = "0.2"
+vte = "0.14"
+portable-pty = "0.9"
