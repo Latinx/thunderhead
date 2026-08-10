@@ -5,7 +5,7 @@ A minimal VT terminal emulator in Rust whose render loop runs an ambient
 *actively affect whatever is on screen in real time* while the terminal stays
 fully interactive.
 
-![Thunderhead demo](demo.gif)
+<video src="thunderhead.mp4" controls muted loop title="Thunderhead demo"></video>
 
 ```
 child shell (pty) ──► pty master ──► vte::Parser ──► Perform ──► Grid (source of truth)
