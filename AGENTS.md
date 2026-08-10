@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Thunderhead** (binary: `stormterm`, project dir shortname: `gale`) — a minimal
+**Thunderhead** (binary: `thunderhead`, project dir: `~/repository/thunderhead`) — a minimal
 VT terminal emulator in Rust whose
 render loop runs an ambient **storm overlay** (rain + lightning) over the live
 cell grid. It spawns the user's shell in a PTY, parses its output, and
@@ -11,7 +11,7 @@ goal: the storm *actively affects* everything on screen in real time while the
 terminal stays fully interactive.
 
 Project dir: `~/repository/gale`. Not a git repo (no `.git`, no `.gitignore`,
-no CI). Binary name `stormterm`; project shortname `gale`.
+no CI). Binary name `thunderhead`.
 
 ## Architecture & Data Flow
 
@@ -64,7 +64,7 @@ src/
 
 ```sh
 cargo build            # debug
-cargo build --release  # optimized; binary at target/release/stormterm
+cargo build --release  # optimized; binary at target/release/thunderhead
 cargo run              # run (needs a real terminal; headless: pipe stdin → exits on EOF)
 ```
 
@@ -109,7 +109,7 @@ Dependencies (all caret ranges): `libc 0.2`, `vte 0.14` (VT parser; note
 ## Testing & QA
 
 - **No test infrastructure exists** — no `#[test]`, no `tests/`, no CI.
-- Headless smoke: `timeout 3 ./target/release/stormterm </dev/null` → should
+- Headless smoke: `timeout 3 ./target/release/thunderhead </dev/null` → should
   emit the takeover sequence + a rendered first frame, then exit 0 on stdin EOF.
 - Interactive verification requires a real terminal (host raw mode + alt
   screen). Verify: prompt renders, typing echoes, `vim`/`less` work (alt

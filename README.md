@@ -38,7 +38,7 @@ the storm.
 
 ```sh
 cargo build --release
-./target/release/stormterm
+./target/release/thunderhead
 ```
 
 Requires a real terminal (WSL/Linux/macOS; host-termios + `poll` code is

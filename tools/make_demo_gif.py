@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Record a Thunderhead demo and render it to an animated GIF.
 
-Spawns stormterm in a PTY and drives a scripted scene:
+Spawns thunderhead in a PTY and drives a scripted scene:
   1. paints a fullscreen ASCII storm (figlet title + generated rain/bolt/ground)
   2. lets the live storm rage over it
   3. transitions into nvim (colorscheme with a colored background, so the
@@ -29,7 +29,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROWS, COLS = 40, 120
 FPS = 60
 CAPTURE_S = 18
-BIN = os.path.expanduser("~/.local/bin/stormterm")
+BIN = os.path.expanduser("~/.local/bin/thunderhead")
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 CELL_W, CELL_H = 10, 20
 FONT_PX = 16
@@ -306,7 +306,7 @@ def render_gif(frames, out_path):
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "demo.gif"
-    print("capturing stormterm demo...")
+    print("capturing thunderhead demo...")
     frames = capture_frames()
     print(f"captured {len(frames)} frames")
     print("rendering gif...")
