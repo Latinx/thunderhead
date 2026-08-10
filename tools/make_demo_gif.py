@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Record a Thunderhead demo and render it to an animated GIF.
 
-Spawns stormterm in a PTY, types a command that paints a figlet wordmark on
-screen (so lightning strikes have text to flare), captures ~14s of the ANSI
-stream while rasterizing the live grid at 10 fps, then renders each frame to
-pixels with PIL and saves a looping GIF.
+Spawns stormterm in a PTY and drives a scripted scene:
+  1. paints a fullscreen ASCII storm (figlet title + generated rain/bolt/ground)
+  2. lets the live storm rage over it
+  3. transitions into nvim (colorscheme with a colored background, so the
+     storm-over-painted-background behavior shows)
+  4. quits nvim and keeps capturing
+
+The ANSI stream is rasterized to a live grid at FPS frames per second and each
+frame is rendered to pixels with PIL, then saved as a looping GIF.
 
 Usage: python3 tools/make_demo_gif.py [out.gif]
 """
@@ -14,21 +19,26 @@ import os
 import re
 import sys
 import time
+import random
 import select
 import struct
+import subprocess
 import termios as T
 import fcntl
 import copy
 
 from PIL import Image, ImageDraw, ImageFont
 
-ROWS, COLS = 24, 80
-FPS = 10
-CAPTURE_S = 14
+ROWS, COLS = 40, 120
+FPS = 60
+CAPTURE_S = 18
 BIN = os.path.expanduser("~/.local/bin/stormterm")
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
-CELL_W, CELL_H = 9, 17
-FONT_PX = 14
+CELL_W, CELL_H = 10, 20
+FONT_PX = 16
+
+ART_PATH = "/tmp/thunderhead_art.txt"
+NVIM_FILE = "/tmp/thunderhead_demo.txt"
 
 # --- xterm 256-color approximation (16 base + 6x6x6 cube + grayscale) --------
 BASE16 = [
@@ -49,6 +59,69 @@ def xterm_rgb(n):
     return (g, g, g)
 
 
+# --- fullscreen ASCII storm art ---------------------------------------------
+def build_art():
+    rng = random.Random(20260810)
+    rows = [[" "] * COLS for _ in range(25)]
+    # clouds along the top
+    for row in range(0, 3):
+        x = 0
+        while x < COLS:
+            width = 8 + rng.randint(0, 12)
+            for i in range(min(width, COLS - x)):
+                rows[row][x + i] = "~"
+            x += width + rng.randint(4, 14)
+    # a big jagged bolt down the middle
+    bx = 62
+    for row in range(3, 22):
+        rows[row][bx] = "|"
+        if row % 2 == 1 and rng.random() < 0.6:
+            bx += 1 if rng.random() < 0.5 else -1
+        # short fork
+        if rng.random() < 0.3:
+            fdir = 1 if rng.random() < 0.5 else -1
+            for i in range(1, 5):
+                if 0 <= bx + fdir * i < COLS:
+                    rows[row][bx + fdir * i] = "-" if i % 2 == 0 else "\\" if fdir > 0 else "/"
+    # slanted rain
+    for row in range(3, 23):
+        for col in range(0, COLS, 2):
+            if col != bx and col != bx + 1 and rng.random() < 0.18:
+                rows[row][col] = "/" if rng.random() < 0.5 else "\\"
+    # ground: hills and a little town
+    rows[23] = list("_" * COLS)
+    town = "_|_|_  __|__  |_|_|_  _|_  |_|"
+    start = (COLS - len(town)) // 2
+    for i, ch in enumerate(town):
+        if 0 <= start + i < COLS:
+            rows[24][start + i] = ch
+    return "\n".join("".join(r).rstrip() for r in rows[:25])
+
+
+def write_scene_files():
+    try:
+        title = subprocess.run(
+            ["figlet", "-f", "standard", "-w", str(COLS), "THUNDERHEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.rstrip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        title = "T H U N D E R H E A D"
+    art = title + "\n\n" + build_art() + "\n"
+    with open(ART_PATH, "w") as f:
+        f.write(art)
+    with open(NVIM_FILE, "w") as f:
+        f.write(
+            "// thunderhead.rs — the storm lives in your terminal\n"
+            "fn main() {\n"
+            "    let mut storm = Storm::new();\n"
+            "    loop {\n"
+            "        storm.tick(dt);\n"
+            "        render(&storm);\n"
+            "    }\n"
+            "}\n"
+        )
+
+
 # --- ANSI stream -> grid rasterizer ------------------------------------------
 class Raster:
     def __init__(self):
@@ -59,7 +132,7 @@ class Raster:
         self.bg = (0, 0, 0)
         self.bold = False
         self.osc = False
-        self.esc = 0  # 0=ground, 1=esc, 2=csi, 3=csi-params
+        self.esc = 0  # 0=ground, 1=esc, 2=csi
         self.params = b""
 
     def _clear_cell(self, r, c):
@@ -98,19 +171,17 @@ class Raster:
                     self.osc = True
                     self.esc = 0
                 else:
-                    self.esc = 0  # charset / other ESC sequences: skip
+                    self.esc = 0
                 continue
             # CSI
-            if self.esc == 2:
-                if b == ord("?"):
-                    self.params += b"?"
-                    continue
-                if 0x30 <= b <= 0x3F:
-                    self.params += bytes([b])
-                    continue
-                self._csi(b)
-                self.esc = 0
+            if b == ord("?"):
+                self.params += b"?"
                 continue
+            if 0x30 <= b <= 0x3F:
+                self.params += bytes([b])
+                continue
+            self._csi(b)
+            self.esc = 0
 
     def _csi(self, final):
         s = self.params.decode("ascii", "replace")
@@ -198,11 +269,12 @@ class Raster:
             else:
                 for c in range(0, self.c + 1):
                     self._clear_cell(self.r, c)
-        # everything else (scroll regions, modes, etc.) is ignored — the diff
-        # renderer re-positions every run, so skipped sequences self-heal.
+        # everything else is ignored — the diff renderer re-positions every
+        # run, so skipped sequences self-heal.
 
 
 def capture_frames():
+    write_scene_files()
     pid, fd = pty.fork()
     if pid == 0:
         os.execv(BIN, [BIN])
@@ -212,12 +284,18 @@ def capture_frames():
     frames = []
     start = time.time()
     next_snap = start + 1.0 / FPS
-    typed = False
     end = start + CAPTURE_S
+    sent = {}  # action -> time it was sent
+
+    def send(t, text):
+        if t not in sent and time.time() - start >= t:
+            os.write(fd, text.encode() + b"\r")
+            sent[t] = True
+
     while time.time() < end:
-        if not typed and time.time() - start > 1.2:
-            os.write(fd, b"figlet -w 78 THUNDERHEAD\r")
-            typed = True
+        send(1.2, "cat " + ART_PATH)                       # fullscreen art
+        send(4.5, "nvim " + NVIM_FILE)                       # their real nvim
+        send(12.0, "\x1b:q")                                # quit nvim
         r, _, _ = select.select([fd], [], [], 0.02)
         if r:
             try:
