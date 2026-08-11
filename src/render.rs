@@ -195,8 +195,8 @@ impl Renderer {
                 }
                 let pos = format!(
                     "\x1b[{};{}H",
-                    (r as i64 + 1 + dr).max(1),
-                    (start as i64 + 1 + dc).max(1)
+                    (r as i64 + 1 + dr).clamp(1, grid.rows as i64),
+                    (start as i64 + 1 + dc).clamp(1, grid.cols as i64)
                 );
                 out.extend_from_slice(pos.as_bytes());
                 for cc in start..c {
