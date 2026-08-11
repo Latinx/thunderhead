@@ -173,6 +173,10 @@ pub struct Storm {
     corona_color: (u8, u8, u8),
     meteor_interval: f64,       // mean seconds between meteors
     meteor_len: f64,            // trail length in cells
+    // per-strike personality (STORM 4.5 ports)
+    strike_flash: f64,          // 1.0 normal, 1.3 powerflash (brighter bolt)
+    strike_corona: f64,         // 1.0 normal, 1.6 sheet (sky flood)
+    last_strike_col: i64,       // where the bolt grounded (test support)
     // effect toggles — flipped from the HUD panel (Ctrl+G h, then a key)
     fx_rain: bool,
     fx_trails: bool,
@@ -227,6 +231,9 @@ impl Storm {
             corona_color: (0x9F, 0xB8, 0xFF),
             meteor_interval: 4.5,
             meteor_len: 12.0,
+            strike_flash: 1.0,
+            strike_corona: 1.0,
+            last_strike_col: 0,
             // default on: the storm-feel set; fog/hail/aurora/matrix opt-in
             fx_rain: true,
             fx_trails: true,
@@ -440,10 +447,11 @@ impl Storm {
             .fold(0.0, f64::max)
     }
 
-    /// Whole-screen cool tint while the flash is fresh (corona effect).
+    /// Whole-screen cool tint while the flash is fresh (corona effect);
+    /// sheet strikes flood the sky harder.
     pub fn corona_level(&self) -> f64 {
         if self.fx_corona {
-            self.flash_level() * 0.45
+            self.flash_level() * 0.45 * self.strike_corona
         } else {
             0.0
         }
@@ -529,12 +537,34 @@ impl Storm {
     /// Strike: the whole jagged bolt appears at once (a real flash is ~1/10s),
     /// and the text heats + rocks burst the same instant it lands.
     fn strike(&mut self, cols: usize, rows: usize) {
-        let mut x = (1 + (self.rand() * (cols.saturating_sub(2) as f64)) as i64).max(0);
+        // roll the strike personality (STORM 4.5): powerflash brightens the
+        // bolt, sheet floods the sky with corona, sparkfly bursts embers
+        let sheet = self.rand() < 0.08;
+        let power = self.rand() < 0.5;
+        self.strike_flash = if power { 1.3 } else { 1.0 };
+        self.strike_corona = if sheet { 1.6 } else { 1.0 };
+        // aim at a grounding column: free wander early, the bolt pulls
+        // toward the target as it descends and snaps home at the bottom
+        let target = (cols as f64 * (0.15 + 0.7 * self.rand())) as i64;
+        let mut x = (target as f64 + self.rand() * cols as f64 * 0.4 - cols as f64 * 0.2) as i64;
+        x = x.clamp(1, cols as i64 - 2);
         let mut prev = x;
         let mut path: Vec<(i64, i64, char, f64)> = Vec::new();
         for r in 0..rows {
-            if r > 0 && self.rand() < 0.45 && x > 0 && x + 1 < cols as i64 {
-                x += if self.rand() < 0.5 { 1 } else { -1 };
+            if r > 0 {
+                // free jitter early; the pull toward the target grows with depth
+                if self.rand() < 0.45 {
+                    x += if self.rand() < 0.5 { 1 } else { -1 };
+                }
+                let p = r as f64 / rows as f64;
+                let pull = (target - x) as f64 * (0.05 + 0.45 * p * p);
+                if pull.abs() >= 1.0 || self.rand() < 0.5 {
+                    x += pull.round() as i64;
+                }
+                if r + 1 == rows {
+                    x = target; // snap home
+                }
+                x = x.clamp(1, cols as i64 - 2);
             }
             let glyph = if x == prev {
                 '|'
@@ -544,21 +574,37 @@ impl Storm {
                 '/'
             };
             path.push((r as i64, x, glyph, BOLT_TTL));
-            // short horizontal tendrils fork off along the way; the forks
-            // effect extends them into proper sub-branches
+            // STORM-style branch: sweeps outward with momentum (a persistent
+            // directional drift per segment) and tapers with depth — branches
+            // near the top are long and wild, near the bottom short and tight
             if self.rand() < 0.20 {
                 let dir: i64 = if self.rand() < 0.5 { 1 } else { -1 };
-                let len = if self.fx_forks { 3 + (self.rand() * 5.0) as i64 } else { 2 + (self.rand() * 3.0) as i64 };
-                for i in 1..=len {
-                    let bx = x + dir * i;
-                    if bx < 0 || bx >= cols as i64 {
+                let taper = 1.0 - (r as f64 / rows as f64) * 0.65;
+                let len = ((if self.fx_forks { 3.0 + self.rand() * 6.0 } else { 2.0 + self.rand() * 3.0 }) * taper) as usize;
+                let propo = dir as f64 * if self.fx_forks { 1.5 } else { 1.0 };
+                let mut bx = x as f64;
+                let mut br = r as i64;
+                let mut bprev = x;
+                for _ in 0..len {
+                    bx += propo + if self.rand() < 0.5 { 1.0 } else { -1.0 };
+                    br += 1;
+                    if bx < 0.0 || bx >= cols as f64 || br >= rows as i64 {
                         break;
                     }
-                    path.push((r as i64, bx, '-', BOLT_TTL));
+                    let bg = if bx as i64 == bprev {
+                        '|'
+                    } else if bx as i64 > bprev {
+                        '\\'
+                    } else {
+                        '/'
+                    };
+                    path.push((br, bx as i64, bg, BOLT_TTL));
+                    bprev = bx as i64;
                 }
             }
             prev = x;
         }
+        self.last_strike_col = x;
         self.bolt = Some(Bolt { path });
         // impact at the bottom of the bolt
         self.impact(x as f64, rows);
@@ -566,8 +612,10 @@ impl Storm {
             self.shake = 1.0; // the whole screen shivers with the boom
         }
         if self.fx_embers {
-            // a couple of embers crawl along the struck row as it cools
-            for _ in 0..2 {
+            // embers crawl along the struck row as it cools; sparkfly rolls
+            // a bigger burst
+            let count = if self.rand() < 0.5 { 5 } else { 2 };
+            for _ in 0..count {
                 let dir = if self.rand() < 0.5 { 1.0 } else { -1.0 };
                 let col = x as f64 + self.rand() * 6.0 - 3.0;
                 let dur = 0.5 + self.rand() * 0.6;
@@ -821,10 +869,13 @@ impl Storm {
                 if tr == row as i64 && tc == col as i64 {
                     let age = (1.0 - ttl / BOLT_TTL).max(0.0).min(1.0);
                     let intensity = kitt_intensity(age);
-                    let (fg, bold) = if intensity >= 0.8 {
+                    // powerflash: the white-hot core lingers and the wake
+                    // burns brighter for the whole flash
+                    let white = 0.8 - (self.strike_flash - 1.0) * 0.5;
+                    let (fg, bold) = if intensity >= white {
                         (Color::Rgb(0xFF, 0xFF, 0xFF), true) // fresh flash: white
                     } else {
-                        wake_tier(intensity)
+                        wake_tier((intensity * self.strike_flash).min(1.0))
                     };
                     return Some(Cell {
                         ch: glyph,
@@ -1176,14 +1227,14 @@ impl Storm {
 mod tests {
     use super::*;
 
-    #[test]
+        #[test]
     fn lean_maps_wind_direction() {
         assert_eq!(lean_for(-1.0), Some('/'));
         assert_eq!(lean_for(1.0), Some('\\'));
         assert_eq!(lean_for(0.05), None);
     }
 
-    #[test]
+        #[test]
     fn kitt_intensity_decays_quadratically() {
         assert!((kitt_intensity(0.0) - 1.0).abs() < 1e-9);
         assert!((kitt_intensity(0.5) - 0.25).abs() < 1e-9);
@@ -1191,7 +1242,7 @@ mod tests {
         assert!((kitt_intensity(2.0) - 0.0).abs() < 1e-9); // clamped
     }
 
-    #[test]
+        #[test]
     fn wake_tiers_follow_thresholds() {
         let (c_hi, b_hi) = wake_tier(0.7);
         assert_eq!(c_hi, Color::Rgb(0xBF, 0xD5, 0xFF));
@@ -1203,7 +1254,7 @@ mod tests {
         assert_eq!(c_lo, Color::Rgb(0x2A, 0x40, 0x70));
     }
 
-    #[test]
+        #[test]
     fn heat_ramp_runs_yellow_to_red() {
         let (r, g, b) = heat_color(1.0); // nearest the strike: red
         assert!(r > g && g > b);
@@ -1218,7 +1269,7 @@ mod tests {
 mod wide_overlay_tests {
     use super::*;
 
-    #[test]
+        #[test]
     fn overlay_skips_wide_continuation_cells() {
         let mut s = Storm::new();
         // a drop sitting exactly on the continuation column of a wide char
@@ -1234,7 +1285,7 @@ mod wide_overlay_tests {
 mod dial_tests {
     use super::*;
 
-    #[test]
+        #[test]
     fn dials_clamp() {
         let mut s = Storm::new();
         for _ in 0..50 {
@@ -1255,7 +1306,7 @@ mod dial_tests {
         assert!(s.strike_interval.0 >= 1.0);
     }
 
-    #[test]
+        #[test]
     fn force_strike_arms_immediately() {
         let mut s = Storm::new();
         s.t = 100.0;
@@ -1269,7 +1320,7 @@ mod dial_tests {
 mod effect_tests {
     use super::*;
 
-    #[test]
+        #[test]
     fn toggles_flip_flags_and_report_names() {
         let mut s = Storm::new();
         assert_eq!(s.toggle_effect(b't'), Some("trails"));
@@ -1281,7 +1332,7 @@ mod effect_tests {
         assert!(s.fx_list().contains("trails") == false); // trails was flipped off
     }
 
-    #[test]
+        #[test]
     fn matrix_respawns_as_katakana() {
         let mut s = Storm::new();
         s.toggle_effect(b'm');
@@ -1294,7 +1345,7 @@ mod effect_tests {
         assert!(s.drops.iter().all(|d| d.glyph == '.' || d.glyph == ','));
     }
 
-    #[test]
+        #[test]
     fn hail_spawns_with_the_flag_on() {
         let mut s = Storm::new();
         s.fx_hail = true;
@@ -1305,7 +1356,7 @@ mod effect_tests {
         assert!(s.drops.iter().any(|d| d.hail), "fixed-seed rng: hail must appear");
     }
 
-    #[test]
+        #[test]
     fn corona_tracks_the_flash_and_fades() {
         let mut s = Storm::new();
         assert_eq!(s.corona_level(), 0.0);
@@ -1315,7 +1366,7 @@ mod effect_tests {
         assert_eq!(s.corona_level(), 0.0);
     }
 
-    #[test]
+        #[test]
     fn shake_offsets_are_small() {
         let mut s = Storm::new();
         assert_eq!(s.shake_offset(), (0, 0));
@@ -1329,6 +1380,46 @@ mod effect_tests {
     
     
     
+    
+        #[test]
+    fn bolt_aims_and_snaps_home() {
+        let mut s = Storm::new();
+        s.strike(80, 24);
+        let b = s.bolt.as_ref().unwrap();
+        // the main bolt lands exactly on the target column at the bottom row
+        assert!(
+            b.path.iter().any(|&(r, c, _, _)| r == 23 && c == s.last_strike_col),
+            "bolt must ground on its target"
+        );
+        assert!(s.last_strike_col >= 1 && s.last_strike_col <= 78);
+        // every path cell stays in bounds
+        assert!(b.path.iter().all(|&(r, c, _, _)| r >= 0 && r < 24 && c >= 0 && c < 80));
+    }
+
+        #[test]
+    fn forks_sweep_longer_branches() {
+        let mut plain = Storm::new();
+        plain.fx_forks = false; // forks default ON; compare against the plain bolt
+        plain.strike(80, 24);
+        let mut forked = Storm::new();
+        forked.fx_forks = true;
+        forked.strike(80, 24);
+        let n_plain = plain.bolt.as_ref().unwrap().path.len();
+        let n_forked = forked.bolt.as_ref().unwrap().path.len();
+        assert!(
+            n_forked > n_plain,
+            "forks must add longer momentum branches ({n_forked} vs {n_plain})"
+        );
+    }
+
+        #[test]
+    fn strike_rolls_a_personality() {
+        let mut s = Storm::new();
+        s.strike(80, 24);
+        assert!(s.strike_flash == 1.0 || s.strike_flash == 1.3);
+        assert!(s.strike_corona == 1.0 || s.strike_corona == 1.6);
+    }
+
     #[test]
     fn hsl_maps_primary_hues() {
         assert_eq!(hsl(0.0, 1.0, 0.5), (255, 0, 0));
@@ -1336,7 +1427,7 @@ mod effect_tests {
         assert_eq!(hsl(240.0, 1.0, 0.5), (0, 0, 255));
     }
 
-    #[test]
+        #[test]
     fn randomize_colors_rerolls_the_palette() {
         let mut s = Storm::new();
         let before = s.rain_color;
@@ -1347,7 +1438,7 @@ mod effect_tests {
         assert!(s.aurora_hi != s.aurora_lo);
     }
 
-    #[test]
+        #[test]
     fn meteor_dials_clamp() {
         let mut s = Storm::new();
         for _ in 0..50 {
@@ -1369,7 +1460,7 @@ mod effect_tests {
         assert!(s.status().contains("meteor"));
     }
 
-#[test]
+    #[test]
     fn meteors_spawn_streak_and_burn_out() {
         let mut s = Storm::new();
         assert_eq!(s.toggle_effect(b'M'), Some("meteors"));
@@ -1404,7 +1495,7 @@ mod effect_tests {
         assert!(s.meteors.is_empty(), "meteors must burn out");
     }
 
-#[test]
+    #[test]
     fn rain_toggle_stops_spawning_without_spinning() {
         let mut s = Storm::new();
         s.tick(0.1, 80, 24);
@@ -1420,7 +1511,7 @@ mod effect_tests {
         assert!(!s.drops.is_empty(), "rain on respawns");
     }
 
-#[test]
+    #[test]
     fn aurora_is_curtains_not_a_lattice() {
         let mut s = Storm::new();
         s.fx_aurora = true;
@@ -1471,7 +1562,7 @@ mod effect_tests {
         assert!(colors.len() >= 2, "the gradient must vary color");
     }
 
-#[test]
+    #[test]
     fn gust_front_is_a_band_not_a_scan_line() {
         // a gust front must be a dense region of leaning rain, never a hard
         // full-height line at one column (the old jitter read as a scan line)
@@ -1498,7 +1589,7 @@ mod effect_tests {
         }
     }
 
-#[test]
+    #[test]
     fn effects_never_paint_continuation_cells() {
         let mut s = Storm::new();
         s.fx_fog = true;
