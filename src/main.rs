@@ -58,7 +58,7 @@ fn host_restore() {
 
 extern "C" fn cleanup_handler(sig: libc::c_int) {
     host_restore();
-    const SEQ: &[u8] = b"\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?25h\x1b[0m\x1b[?1049l\r\n";
+    const SEQ: &[u8] = b"\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?25h\x1b[0m\r\n";
     unsafe {
         libc::write(1, SEQ.as_ptr() as *const libc::c_void, SEQ.len());
         libc::signal(sig, libc::SIG_DFL);
@@ -157,7 +157,7 @@ fn main() {
     // Take over the host terminal.
     host_raw_on();
     let mut out = Vec::with_capacity(1 << 16);
-    out.extend_from_slice(b"\x1b[?1049h\x1b[?25l");
+    out.extend_from_slice(b"\x1b[?25l"); // no alt screen: the host scrollback takes the wheel
     std::io::stdout().write_all(&out).unwrap();
     std::io::stdout().flush().unwrap();
     out.clear();
@@ -369,7 +369,7 @@ fn main() {
     let _ = child.kill();
     host_restore();
     std::io::stdout()
-        .write_all(b"\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?25h\x1b[0m\x1b[?1049l\r\n")
+        .write_all(b"\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?25h\x1b[0m\r\n")
         .unwrap();
     std::io::stdout().flush().unwrap();
 }

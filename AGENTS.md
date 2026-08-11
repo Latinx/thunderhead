@@ -73,7 +73,7 @@ host stdin (raw) ──► forwarded verbatim to pty ─────────
   the wheel can scroll (CUP-only repaints starve it). Consecutive scrolls
   of the same region merge; alt-screen transitions clear pending scrolls.
 - `src/main.rs` — host tty raw mode + SIGTERM/SIGHUP/SIGINT safety net (restore
-  termios + leave alt screen before dying), PTY spawn via portable-pty, resize
+  termios before dying), PTY spawn via portable-pty, resize
   propagation (host size → grid → renderer → child pty), Ctrl+Q double-tap
   (within 1.2s) exits the storm.
 
