@@ -802,19 +802,25 @@ impl Storm {
             }
         }
 
-        // gust front: a jagged line sweeping across with the gust
+        // gust front: a dense band of wind-blown rain sweeping across —
+        // sparse leaning glyphs on empty cells, densest at the leading edge,
+        // so it reads as a wall of weather instead of a scan line
         if let Some((fx, dir, _spd)) = self.front {
             if base.ch == ' ' {
-                let jitter = ((row * 7) % 5) as f64 - 2.0;
-                if (col as f64 - (fx + jitter)).abs() < 0.6 {
-                    return Some(Cell {
-                        ch: if dir < 0.0 { '╱' } else { '╲' },
-                        fg: Color::Rgb(0x99, 0xAA, 0xEE),
-                        bg: base.bg,
-                        bold: false,
-                        reverse: false,
-                        width: 1,
-                    });
+                let d = (col as f64 - fx).abs();
+                if d < 6.0 {
+                    let h = (row * 31 + col * 17) as i64 + (fx * 3.0) as i64;
+                    let edge = ((6.0 - d) / 6.0 * 3.0).round() as i64; // 0..3
+                    if edge > 0 && h.rem_euclid(4) < edge {
+                        return Some(Cell {
+                            ch: if dir < 0.0 { '/' } else { '\\' },
+                            fg: RAIN_COLOR,
+                            bg: base.bg,
+                            bold: h.rem_euclid(3) == 0,
+                            reverse: false,
+                            width: 1,
+                        });
+                    }
                 }
             }
         }
@@ -1021,7 +1027,36 @@ mod effect_tests {
         assert!(dr.abs() <= 1 && dc.abs() <= 1);
     }
 
+    
     #[test]
+    fn gust_front_is_a_band_not_a_scan_line() {
+        // a gust front must be a dense region of leaning rain, never a hard
+        // full-height line at one column (the old jitter read as a scan line)
+        let mut s = Storm::new();
+        s.rows = 24;
+        let blank = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 1 };
+        for dir in [-1.0f64, 1.0] {
+            s.front = Some((40.0, dir, 70.0));
+            let mut per_col = vec![0usize; 80];
+            let mut total = 0;
+            let mut cols_used = 0usize;
+            for r in 0..24 {
+                for c in 0..80 {
+                    if let Some(cell) = s.overlay(blank, r, c) {
+                        assert!(cell.ch == '/' || cell.ch == '\\', "front glyph must lean with the wind");
+                        per_col[c] += 1;
+                        total += 1;
+                    }
+                }
+            }
+            assert!(total > 0, "the front band must render some glyphs");
+            cols_used = per_col.iter().filter(|&&n| n > 0).count();
+            assert!(cols_used >= 4, "the band must span several columns, got {cols_used}");
+            assert!(per_col.iter().all(|&n| n < 24), "no column may be a full-height line");
+        }
+    }
+
+#[test]
     fn effects_never_paint_continuation_cells() {
         let mut s = Storm::new();
         s.fx_fog = true;
