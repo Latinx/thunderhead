@@ -41,14 +41,18 @@ host stdin (raw) ──► forwarded verbatim to pty ─────────
   `/`/`\` with gusts), a lightning FLASH — the full jagged polyline appears
   at once, white-hot for ~0.18s, fading through wake tiers — with the text
   heating by proximity (red/orange/yellow) and bezier rock sparks on impact.
-  Twelve toggleable effects (panel keys `r t c k F e s g f h a m M`,
+  Twelve toggleable effects (panel keys `r t c k F e s g f h a m M U`,
   `r` = rain on/off): drop trails, corona tint, screen shake, forked
   bolts + halo, ember crawl, splash rings, gust bands (glowing leading
   edge), fog bands (wavy glowing haze that dims text), hail, aurora
   (wavy curtains that bloom a glow into the bg instead of inheriting
   it), matrix (halfwidth katakana rain), meteors (diagonal streaks
   with white-hot heads and tapering ember trails; rate = `1`/`2`,
-  trail size = `3`/`4`, both clamped). `C` re-rolls the runtime
+  trail size = `3`/`4`, both clamped), and a UFO (a saucer that
+  occasionally crosses the sky, hovers, drops a warm beam over the
+  surface, and lifts a glyph up into its belly before departing; the
+  victim is a pure overlay lift — the base cell underneath is never
+  touched). `C` re-rolls the runtime
   palette (rain/spark/aurora/corona colors are fields, not consts —
   meteors stay white-hot). Lightning is a port of STORM 4.5's model
   (Dan Robinson, stormhighway.com): the bolt aims at a grounding

@@ -181,7 +181,7 @@ fn main() {
     let mut last_mouse_sgr = false;
     // The HUD panel: a vertical control deck, floats mid-right of the screen.
     // Line indexes are stable: 0-3 status, 4 palette swatch, 5 fx, 6-14
-    // toggles, 15-18 dials.
+    // toggles, 15 dials, 16-18 blank/dial-footer.
     let mut hud_lines: Vec<String> = vec![
         String::new(), // 0: storm  rain  45%
         String::new(), // 1: speed
@@ -197,8 +197,9 @@ fn main() {
         "f fog       h hail".to_string(), // 11
         "a aurora    m matrix".to_string(), // 12
         "M meteors   C randomize".to_string(), // 13
-        String::new(), // 14: blank
-        "1 / 2 meteor rate   3 / 4 meteor size".to_string(), // 15
+        "U ufo".to_string(), // +1: ufo row
+        String::new(), // blank
+        "1 / 2 meteor rate   3 / 4 meteor size".to_string(), // dials
         "] / [ density       = / - speed".to_string(), // 16
         ". / , strikes       b bolt".to_string(), // 17
         "Ctrl+G h close".to_string(), // 18

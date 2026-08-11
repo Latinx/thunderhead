@@ -56,13 +56,15 @@ Unix-only). Your shell (`$SHELL`) is spawned inside.
   - `=` / `-` — rain fall speed up / down
   - `.` / `,` — strike frequency up / down
   - `b` — force a lightning strike now
-  - `r t c k F e s g f h a m M` — toggle effects: `rain` (drops on/off),
+  - `r t c k F e s g f h a m M U` — toggle effects: `rain` (drops on/off),
     `trails` (drop wakes), `corona` (whole-screen tint on strike),
     `shake` (screen jolts), `forks` (branched bolts + halo), `embers`
     (crawl along the struck row), `splash` (impact ripples), `fronts`
     (sweeping gust bands), `fog` (drifting glowing haze), `hail` (big
     bright drops), `aurora` (glowing curtains), `matrix` (green katakana
-    rain), `meteors` (bright diagonal streaks)
+    rain), `meteors` (bright diagonal streaks), `ufo` (a saucer that
+    crosses the sky, hovers, drops a beam, and lifts a glyph off the
+    surface into its belly)
   - `1` / `2` — meteor spawn rate down / up (trail length via `3` / `4`)
   - `C` — re-roll the whole palette from a random hue (rain, sparks,
     aurora, corona tint; meteors stay white-hot)

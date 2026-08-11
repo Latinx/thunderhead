@@ -149,6 +149,23 @@ struct Meteor {
     len: f64, // trail length in cells
 }
 
+/// An alien saucer that occasionally crosses the sky, drops a beam, and
+/// lifts a glyph off the surface into its belly before departing.
+#[derive(Debug)]
+struct Ufo {
+    x: f64,     // current column (float)
+    y: f64,     // row anchor
+    dir: f64,   // -1 left, +1 right
+    t: f64,     // 0..1 flight progress
+    dur: f64,   // flight duration (seconds)
+    bob_phase: f64,
+    visible: bool, // saucer is drawn (vs. just the beam after it leaves)
+    pickup: Option<(usize, usize, f64)>, // (victim col, victim row, lift 0..1)
+    pick_dur: f64,
+}
+
+
+
 pub struct Storm {
     drops: Vec<Drop>,
     bolt: Option<Bolt>,
@@ -196,6 +213,7 @@ pub struct Storm {
     fx_aurora: bool,
     fx_matrix: bool,
     fx_meteor: bool,
+    fx_ufo: bool,
     // effect state
     shake: f64,                  // 0..1 post-strike screen shake
     fog_t: f64,                  // fog drift clock
@@ -206,6 +224,8 @@ pub struct Storm {
     embers: Vec<(f64, f64, f64, f64, f64)>, // (row, col, dir, life, dur)
     meteors: Vec<Meteor>,
     next_meteor: f64,
+    ufo: Option<Ufo>,
+    next_ufo: f64,
     rows: usize,                 // last tick's canvas height (fog band needs it)
 }
 
@@ -253,6 +273,7 @@ impl Storm {
             fx_aurora: false,
             fx_matrix: false,
             fx_meteor: false,
+            fx_ufo: false,
             shake: 0.0,
             fog_t: 0.0,
             aurora_t: 0.0,
@@ -262,6 +283,8 @@ impl Storm {
             embers: Vec::new(),
             meteors: Vec::new(),
             next_meteor: 4.0,
+            ufo: None,
+            next_ufo: 14.0,
             rows: 0,
         }
     }
@@ -384,6 +407,10 @@ impl Storm {
                 self.fx_meteor = !self.fx_meteor;
                 Some("meteors")
             }
+            b'U' => {
+                self.fx_ufo = !self.fx_ufo;
+                Some("ufo")
+            }
             b'm' => {
                 self.fx_matrix = !self.fx_matrix;
                 self.drops.clear(); // respawn as katakana (or back to rain)
@@ -431,6 +458,9 @@ impl Storm {
         }
         if self.fx_meteor {
             on.push("meteors");
+        }
+        if self.fx_ufo {
+            on.push("ufo");
         }
         if self.fx_matrix {
             on.push("matrix");
@@ -857,6 +887,64 @@ impl Storm {
                 });
             }
         }
+
+        // ufo: an occasional saucer crossing the sky. Halfway across it
+        // hovers, drops a beam over a populated column, and lifts a glyph
+        // off the surface before departing.
+        if self.fx_ufo {
+            if self.ufo.is_none() && self.t >= self.next_ufo {
+                let dir = if self.rand() < 0.5 { -1.0 } else { 1.0 };
+                let start = if dir < 0.0 { cols as f64 + 6.0 } else { -6.0 };
+                let dur = 7.0 + self.rand() * 4.0;
+                let hop = (rows as f64 * 0.12).max(2.0) as usize;
+                self.ufo = Some(Ufo {
+                    x: start,
+                    y: hop as f64 + self.rand(),
+                    dir,
+                    t: 0.0,
+                    dur,
+                    bob_phase: self.rand() * std::f64::consts::TAU,
+                    visible: true,
+                    pickup: None,
+                    pick_dur: 2.6,
+                });
+                self.next_ufo = self.t + 10.0 + self.rand() * 14.0;
+            }
+            let mut departed = false;
+            if let Some(u) = &mut self.ufo {
+                // clamp speed: from the entry to past the far edge over `dur`
+                u.t += dt / u.dur;
+                u.x += u.dir * (cols as f64 + 12.0) / u.dur * dt;
+                // hover + beam mid-flight (~35-75% progress), then resume
+                if u.pickup.is_none()
+                    && u.t > 0.32
+                    && u.t < 0.72
+                    && (u.x as isize).abs() < cols as isize
+                {
+                    // beam target: the column is on-screen, lower half of it
+                    let vcol = u.x.round().clamp(0.0, cols as f64 - 1.0) as usize;
+                    u.pickup = Some((vcol, rows.saturating_sub(3), 0.0));
+                }
+                if let Some((_, _, lift)) = &mut u.pickup {
+                    *lift += dt / u.pick_dur;
+                    if *lift >= 1.0 {
+                        u.pickup = None;
+                        u.visible = true; // saucer returns to view to depart
+                    } else {
+                        u.visible = false; // lights out behind the beam glow
+                    }
+                }
+                // fly off once the pickup is done. The x guard is
+                // direction-aware so a UFO spawning offscreen (entry at
+                // -6 or cols+6) doesn't instantly depart in the same tick.
+                if u.pickup.is_none() && (u.t > 0.82 || (u.dir < 0.0 && u.x < -1.0) || (u.dir > 0.0 && u.x > cols as f64 + 1.0)) {
+                    departed = true;
+                }
+            }
+            if departed {
+                self.ufo = None;
+            }
+        }
     }
 
     /// bezier point at eased t (ease-out quint, TTE OutQuint on the path)
@@ -1235,6 +1323,90 @@ impl Storm {
                         width: 1,
                     });
                 }
+            }
+        }
+
+        // ufo: a saucer gliding across the sky. While picking up it hovers
+        // with a warm light beam down to the ground and a glyph rising up
+        // the beam into the belly of the ship, then lights vanish and it
+        // departs. Keeps the base background; never touches a wide char.
+        if let Some(u) = &self.ufo {
+            let sy = if u.visible {
+                u.y + (self.t * 14.0 + u.bob_phase).sin() * 0.3
+            } else {
+                u.y
+            };
+            let cx_f = u.x.round();
+            let beam_on = u.pickup.is_some();
+            let (lift_col, lift_row, lift) = match u.pickup.as_ref().map(|(c, r, l)| (*c, *r, *l)) {
+                Some(v) => v,
+                // no pickup: nothing to lift — inert, since the beam block is
+                // guarded by beam_on (pickup.is_some())
+                None => (0, 0, 0.0),
+            };
+            let lift = lift.min(1.0);
+            let gy = u.y.round() as isize;
+            let by: isize = lift_row as isize;
+            // the victim rises from the surface toward the saucer as the
+            // lift progresses (lerp between the bottom and just under the
+            // ship), so it visibly climbs the beam
+            let vy = (lift_row as f64 + (((gy + 1).max(1) as f64) - lift_row as f64) * lift).floor() as isize;
+            // the beam: a warm cone from the saucer down to the pickup
+            if beam_on && gy < by {
+                let dy = (by - gy) as f64;
+                if sy > 0.5 && row as isize >= gy && row as isize <= by {
+                    let k = (row as isize - gy) as f64 / dy; // 0 top -> 1 bottom
+                    let w = (0.9 + k * 2.0 * (1.0 - lift).max(0.0) + 0.9 * k).clamp(1.0, 8.0);
+                    let dc = (col as i64 - lift_col as i64).unsigned_abs() as f64; 
+                    if dc <= w {
+                        let edge = (1.0 - dc / w).max(0.0);
+                        let shimmer = 0.75 + 0.25 * (self.t * 12.0 + col as f64 * 0.5).sin();
+                        let tint = (lift * 1.6).min(1.0);
+                        let br = lerp(0x58, 0xFF, tint * 0.7);
+                        let bgc = lerp(0xE0, 0xF8, 0.0);
+                        let bb = lerp(0x58, 0xC0, tint);
+                        let beam_fg = Color::Rgb(
+                            lerp(0x80, br, shimmer),
+                            lerp(0xD0, bgc, shimmer),
+                            lerp(0x70, bb, shimmer),
+                        );
+                        let beam_bg = Color::Rgb(
+                            lerp(0x12, br, edge * 0.5 * shimmer),
+                            lerp(0x2C, bgc, edge * 0.5 * shimmer),
+                            lerp(0x12, bb, edge * 0.5 * shimmer),
+                        );
+                        // the rising victim rides the center of the beam,
+                        // climbing from the surface up into the ship
+                        if row as isize == vy && col as i64 == lift_col as i64 {
+                            return Some(Cell { ch: '\u{2593}', fg: Color::Rgb(0xFF, 0xEF, 0x80), bg: beam_bg, bold: true, reverse: false, width: 1 });
+                        }
+                        if dc < 0.55 {
+                            return Some(Cell { ch: '|', fg: beam_fg, bg: beam_bg, bold: true, reverse: false, width: 1 });
+                        }
+                        let ch = if edge > 0.5 { ':' } else { '·' };
+                        return Some(Cell { ch, fg: beam_fg, bg: beam_bg, bold: false, reverse: false, width: 1 });
+                    }
+                }
+            }
+            // the saucer body: a wide dish with a dome, drawn in the sky
+            if u.visible && sy > 1.5 && sy < self.rows as f64 - 4.0 {
+                let dri = (row as i64) - sy.round() as i64; // signed row delta
+                let dci = (col as i64) - cx_f as i64;
+                let dc = dci.unsigned_abs();
+                let (g, fg, bold) = if dc == 0 && dri == 0 {
+                    ('◉', Color::Rgb(0x8C, 0x9A, 0xFF), true) // the dome
+                } else if dc <= 3 && dri == 0 {
+                    ('▔', Color::Rgb(0xDF, 0xE6, 0xFF), false) // the dish
+                } else if dc <= 2 && dri == -1 {
+                    ('▔', Color::Rgb(0xCF, 0xD8, 0xFF), false) // top shine
+                } else if dc <= 4 && dri == 1 {
+                    ('▁', Color::Rgb(0xB8, 0xC4, 0xFF), false) // underbelly
+                } else if (dc == 1 || dc == 2) && dri == 2 {
+                    ('∘', Color::Rgb(0xFF, 0x9A, 0x3C), true) // running lights
+                } else {
+                    return None; // not on the saucer
+                };
+                return Some(Cell { ch: g, fg, bg: Color::Rgb(0x33, 0x3C, 0x70), bold, reverse: false, width: 1 });
             }
         }
 
@@ -1629,5 +1801,80 @@ mod effect_tests {
                 assert!(s.overlay(cont, r, c).is_none(), "continuation cell painted at {r},{c}");
             }
         }
+    }
+
+    #[test]
+    fn ufo_flies_beam_rises_and_departs() {
+        let mut s = Storm::new();
+        s.fx_ufo = true;
+        s.rows = 24;
+        let blank = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 1 };
+
+        // force-due: a UFO spawns and starts crossing
+        s.next_ufo = 0.0;
+        s.tick(0.016, 80, 24);
+        assert!(s.ufo.is_some(), "a due ufo must spawn");
+        let (vcol, vrow) = (10usize, 20usize);
+        s.ufo.as_mut().unwrap().pickup = Some((vcol, vrow, 0.0));
+        s.ufo.as_mut().unwrap().x = 10.0;
+        s.ufo.as_mut().unwrap().y = 2.0;
+        s.ufo.as_mut().unwrap().t = 0.5;
+
+        // the beam spans from the saucer down toward the victim
+        let mut beam_hits = 0usize;
+        for r in 0..24 {
+            for c in 0..80 {
+                if let Some(cell) = s.overlay(blank, r, c) {
+                    if cell.ch == '|' {
+                        beam_hits += 1;
+                    }
+                }
+            }
+        }
+        assert!(beam_hits >= 8, "the beam must trace a column, got {beam_hits}");
+
+        // the victim must RISE: its row pulls toward the saucer as lift grows
+        let mut prev_vrow: Option<usize> = None;
+        let mut rising = true;
+        let _ = vrow;
+        for step in 1..=10 {
+            let lift = step as f64 / 10.0; // 0.1 (low) -> 1.0 (high)
+            s.ufo.as_mut().unwrap().pickup = Some((vcol, vrow, lift));
+            let mut found: Option<usize> = None;
+            for r in 0..24 {
+                if let Some(cell) = s.overlay(blank, r, vcol) {
+                    if cell.ch == '\u{2593}' {
+                        found = Some(r);
+                    }
+                }
+            }
+            match (found, prev_vrow) {
+                (Some(r), Some(prev)) if r < prev => {} // climbed toward the top
+                (Some(r), None) => {}
+                _ => {
+                    rising = false;
+                    break;
+                }
+            }
+            if found.is_some() {
+                prev_vrow = found;
+            } else {
+                rising = false;
+                break;
+            }
+        }
+        assert!(rising, "the victim must climb toward the saucer as lift grows");
+
+        // advancing beat by beat, the lift completes and the ufo departs
+        let mut finished = false;
+        for _ in 0..300 {
+            s.tick(0.05, 80, 24);
+            if let Some(u) = &s.ufo {
+                if u.pickup.is_none() && u.t > 0.82 {
+                    finished = true;
+                }
+            }
+        }
+        assert!(finished || s.ufo.is_none(), "the ufo must finish and depart");
     }
 }
