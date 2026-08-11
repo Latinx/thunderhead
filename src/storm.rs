@@ -189,6 +189,18 @@ impl Storm {
         self.next_strike = self.t;
     }
 
+    /// Current dial values, for the on-screen HUD.
+    pub fn status(&self) -> String {
+        format!(
+            "storm  rain {:>3.0}%  speed {:>3.0}-{:>3.0} c/s  strike {:.1}-{:.1}s",
+            self.rain_density * 100.0,
+            self.rain_speed.0,
+            self.rain_speed.1,
+            self.strike_interval.0,
+            self.strike_interval.1,
+        )
+    }
+
     fn ensure_glow(&mut self, rows: usize, cols: usize) {
         if self.glow_rows != rows || self.glow_cols != cols {
             self.glow = vec![0.0; rows * cols];

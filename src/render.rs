@@ -78,7 +78,23 @@ impl Renderer {
         }
     }
 
-    fn composite(&self, grid: &Grid, storm: &Storm, r: usize, c: usize) -> Cell {
+    fn composite(&self, grid: &Grid, storm: &Storm, hud: Option<&str>, r: usize, c: usize) -> Cell {
+        // the transient storm HUD owns the bottom row while visible
+        if let Some(text) = hud {
+            if r + 1 == grid.rows {
+                if let Some(ch) = text.chars().nth(c) {
+                    return Cell {
+                        ch,
+                        fg: Color::Rgb(0x68, 0xA3, 0xE8),
+                        bg: Color::Default,
+                        bold: true,
+                        reverse: false,
+                        width: 1,
+                    };
+                }
+                return Cell::default();
+            }
+        }
         let base = grid.cell(r, c);
         match storm.overlay(base, r, c) {
             Some(o) => o,
@@ -86,7 +102,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, grid: &Grid, storm: &Storm, out: &mut Vec<u8>) {
+    pub fn render(&mut self, grid: &Grid, storm: &Storm, hud: Option<&str>, out: &mut Vec<u8>) {
         if grid.rows != self.rows || grid.cols != self.cols {
             self.rows = grid.rows;
             self.cols = grid.cols;
@@ -110,7 +126,7 @@ impl Renderer {
         for r in 0..grid.rows {
             // fill row_buf with the composite for this row
             for c in 0..grid.cols {
-                let mut cell = self.composite(grid, storm, r, c);
+                let mut cell = self.composite(grid, storm, hud, r, c);
                 if let Some((cr, cc, ccell)) = cursor_cell {
                     if cr == r && cc == c {
                         cell = ccell;
