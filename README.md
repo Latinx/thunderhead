@@ -7,7 +7,7 @@ fully interactive.
 
 ![Thunderhead demo](demo.gif)
 
-<video src="thunderhead.mp4" controls muted loop title="Thunderhead demo — full recording"></video>
+[▶ Watch the full 39s recording](thunderhead.mp4)
 
 ```
 child shell (pty) ──► pty master ──► vte::Parser ──► Perform ──► Grid (source of truth)
