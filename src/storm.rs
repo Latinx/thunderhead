@@ -47,14 +47,19 @@ fn kitt_intensity(age: f64) -> f64 {
     f * f
 }
 
-/// Three-tier wake palette (omp shimmer thresholds): crest bold, mid, dim.
-fn wake_tier(intensity: f64) -> (Color, bool) {
+/// Three-tier wake palette (omp shimmer thresholds), derived from the rain
+/// color so a re-rolled palette keeps the whole flash coherent.
+fn wake_tier(intensity: f64, rain: Color) -> (Color, bool) {
+    let (r, g, b) = match rain {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (0x68, 0xA3, 0xE8),
+    };
     if intensity >= TIER_HIGH {
-        (Color::Rgb(0xBF, 0xD5, 0xFF), true)
+        (Color::Rgb(lerp(r, 0xFF, 0.55), lerp(g, 0xFF, 0.55), lerp(b, 0xFF, 0.55)), true)
     } else if intensity >= TIER_MID {
-        (Color::Rgb(0x68, 0xA3, 0xE8), false)
+        (Color::Rgb(r, g, b), false)
     } else {
-        (Color::Rgb(0x2A, 0x40, 0x70), false)
+        (Color::Rgb(lerp(r, 0x10, 0.55), lerp(g, 0x18, 0.55), lerp(b, 0x30, 0.55)), false)
     }
 }
 
@@ -306,15 +311,16 @@ impl Storm {
     /// `C` — re-roll the whole palette from a random hue (meteors stay
     /// white-hot — they're physical).
     pub fn randomize_colors(&mut self) {
+        // vivid, not pastel — a re-rolled rain must be visibly a new color
         let h = self.rand() * 360.0;
-        let rain = hsl(h, 0.45, 0.85);
-        let spark = hsl((h + 40.0) % 360.0, 0.85, 0.55);
+        let rain = hsl(h, 0.62, 0.76);
+        let spark = hsl((h + 40.0) % 360.0, 0.9, 0.5);
         self.rain_color = Color::Rgb(rain.0, rain.1, rain.2);
         self.spark_color = Color::Rgb(spark.0, spark.1, spark.2);
-        self.aurora_lo = hsl((h + 180.0) % 360.0, 0.75, 0.72);
-        self.aurora_mid = hsl((h + 240.0) % 360.0, 0.75, 0.72);
-        self.aurora_hi = hsl((h + 300.0) % 360.0, 0.75, 0.72);
-        self.corona_color = hsl(h, 0.6, 0.85);
+        self.aurora_lo = hsl((h + 180.0) % 360.0, 0.85, 0.68);
+        self.aurora_mid = hsl((h + 240.0) % 360.0, 0.85, 0.68);
+        self.aurora_hi = hsl((h + 300.0) % 360.0, 0.85, 0.68);
+        self.corona_color = hsl(h, 0.7, 0.82);
     }
 
     /// The corona tint color, for the renderer.
@@ -475,18 +481,27 @@ impl Storm {
         (dr, dc)
     }
 
-    /// Current dial values, for the on-screen HUD.
-    pub fn status(&self) -> String {
-        format!(
-            "storm  rain {:>3.0}%  speed {:>3.0}-{:>3.0} c/s  strike {:.1}-{:.1}s  meteor {:.1}s/{:.0}c",
-            self.rain_density * 100.0,
-            self.rain_speed.0,
-            self.rain_speed.1,
-            self.strike_interval.0,
-            self.strike_interval.1,
-            self.meteor_interval,
-            self.meteor_len,
-        )
+    /// Current dial values, one per line for the vertical HUD block.
+    pub fn status_lines(&self) -> Vec<String> {
+        vec![
+            format!("storm  rain  {:>3.0}%", self.rain_density * 100.0),
+            format!("speed  {:>3.0}-{:>3.0} c/s", self.rain_speed.0, self.rain_speed.1),
+            format!("strike {:.1}-{:.1}s", self.strike_interval.0, self.strike_interval.1),
+            format!("meteor {:.1}s/{:.0}c", self.meteor_interval, self.meteor_len),
+        ]
+    }
+
+    /// The live palette, as [rain, spark, aurora, corona] — for the HUD swatch.
+    pub fn swatch(&self) -> [(u8, u8, u8); 4] {
+        let rain = match self.rain_color {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => (0xAA, 0xAA, 0xFF),
+        };
+        let spark = match self.spark_color {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => (0xFF, 0x4D, 0x00),
+        };
+        [rain, spark, self.aurora_hi, self.corona_color]
     }
 
     fn ensure_glow(&mut self, rows: usize, cols: usize) {
@@ -875,7 +890,7 @@ impl Storm {
                     let (fg, bold) = if intensity >= white {
                         (Color::Rgb(0xFF, 0xFF, 0xFF), true) // fresh flash: white
                     } else {
-                        wake_tier((intensity * self.strike_flash).min(1.0))
+                        wake_tier((intensity * self.strike_flash).min(1.0), self.rain_color)
                     };
                     return Some(Cell {
                         ch: glyph,
@@ -894,9 +909,13 @@ impl Storm {
                 {
                     let age = (1.0 - ttl / BOLT_TTL).max(0.0).min(1.0);
                     if kitt_intensity(age) > 0.5 {
+                        let (hr, hg, hb) = match self.rain_color {
+                            Color::Rgb(r, g, b) => (r, g, b),
+                            _ => (0x9F, 0xB8, 0xFF),
+                        };
                         return Some(Cell {
                             ch: '·',
-                            fg: Color::Rgb(0x9F, 0xB8, 0xFF),
+                            fg: Color::Rgb(lerp(hr, 0xFF, 0.6), lerp(hg, 0xFF, 0.6), lerp(hb, 0xFF, 0.6)),
                             bg: base.bg,
                             bold: false,
                             reverse: false,
@@ -1243,15 +1262,20 @@ mod tests {
     }
 
         #[test]
-    fn wake_tiers_follow_thresholds() {
-        let (c_hi, b_hi) = wake_tier(0.7);
-        assert_eq!(c_hi, Color::Rgb(0xBF, 0xD5, 0xFF));
+    fn wake_tiers_follow_thresholds_and_rain() {
+        let rain = Color::Rgb(0xAA, 0xAA, 0xFF);
+        let (c_hi, b_hi) = wake_tier(0.7, rain);
         assert!(b_hi);
-        let (c_mid, b_mid) = wake_tier(0.4);
-        assert_eq!(c_mid, Color::Rgb(0x68, 0xA3, 0xE8));
+        // high tier = rain lightened toward white
+        assert_eq!(c_hi, Color::Rgb(lerp(0xAA, 0xFF, 0.55), lerp(0xAA, 0xFF, 0.55), 0xFF));
+        let (c_mid, b_mid) = wake_tier(0.4, rain);
+        assert_eq!(c_mid, rain); // mid tier = the rain color itself
         assert!(!b_mid);
-        let (c_lo, _) = wake_tier(0.1);
-        assert_eq!(c_lo, Color::Rgb(0x2A, 0x40, 0x70));
+        let (c_lo, _) = wake_tier(0.1, rain);
+        assert_ne!(c_lo, rain); // low tier = dimmed
+        // a different rain color changes the wake (palette coherence)
+        let (c_hi2, _) = wake_tier(0.7, Color::Rgb(0xFF, 0x80, 0x80));
+        assert_ne!(c_hi, c_hi2);
     }
 
         #[test]
@@ -1457,7 +1481,7 @@ mod effect_tests {
             s.dial_meteor_size(-1.0);
         }
         assert!(s.meteor_len >= 4.0);
-        assert!(s.status().contains("meteor"));
+        assert!(s.status_lines()[3].contains("meteor"));
     }
 
     #[test]

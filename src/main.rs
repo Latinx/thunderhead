@@ -75,9 +75,8 @@ fn host_size() -> (usize, usize) {
     }
 }
 
-/// Apply a dial key to the storm; returns the new HUD status text,
-/// or None if the key isn't a dial.
-fn dial(storm: &mut storm::Storm, b: u8) -> Option<String> {
+/// Apply a dial key to the storm; returns true if the key was a dial.
+fn dial(storm: &mut storm::Storm, b: u8) -> bool {
     match b {
         b']' => storm.dial_density(1.0),
         b'[' => storm.dial_density(-1.0),
@@ -90,9 +89,17 @@ fn dial(storm: &mut storm::Storm, b: u8) -> Option<String> {
         b'2' => storm.dial_meteor_rate(1.0),
         b'3' => storm.dial_meteor_size(-1.0),
         b'4' => storm.dial_meteor_size(1.0),
-        _ => return None,
+        _ => return false,
     }
-    Some(storm.status())
+    true
+}
+
+/// Refresh the live panel lines: 0-3 status block, 5 fx list.
+fn refresh_hud(hud: &mut [String], storm: &storm::Storm) {
+    for (i, line) in storm.status_lines().iter().enumerate() {
+        hud[i] = line.clone();
+    }
+    hud[5] = storm.fx_list();
 }
 
 fn main() {
@@ -157,17 +164,31 @@ fn main() {
     // dial-matched mid-stream. 0 = none, 1 = saw ESC, 2 = inside CSI/SS3.
     let mut esc_seq: u8 = 0;
     let mut hud_on = false;
-    // The HUD panel: line 0 is the live status, line 1 the enabled-effect
-    // list, the rest a legend. It owns the bottom lines while visible.
+    // The HUD panel: a vertical control deck, floats mid-right of the screen.
+    // Line indexes are stable: 0-3 status, 4 palette swatch, 5 fx, 6-14
+    // toggles, 15-18 dials.
     let mut hud_lines: Vec<String> = vec![
-        String::new(),
-        String::new(), // fx line, filled once the storm exists
-        "r rain  t trails  c corona  k shake  F forks  e embers".to_string(),
-        "s splash  g fronts  f fog  h hail  a aurora  m matrix  M meteors".to_string(),
-        "C randomize colors   1 / 2 meteor rate   3 / 4 meteor size".to_string(),
-        "dials: ] / [ density  = / - speed  . / , strikes  b bolt   Ctrl+G h close".to_string(),
+        String::new(), // 0: storm  rain  45%
+        String::new(), // 1: speed
+        String::new(), // 2: strike
+        String::new(), // 3: meteor
+        "colors   ● ● ● ●".to_string(), // 4: live palette swatch
+        String::new(), // 5: fx list
+        String::new(), // 6: blank
+        "r rain      t trails".to_string(), // 7
+        "c corona    k shake".to_string(), // 8
+        "F forks     e embers".to_string(), // 9
+        "s splash    g fronts".to_string(), // 10
+        "f fog       h hail".to_string(), // 11
+        "a aurora    m matrix".to_string(), // 12
+        "M meteors   C randomize".to_string(), // 13
+        String::new(), // 14: blank
+        "1 / 2 meteor rate   3 / 4 meteor size".to_string(), // 15
+        "] / [ density       = / - speed".to_string(), // 16
+        ". / , strikes       b bolt".to_string(), // 17
+        "Ctrl+G h close".to_string(), // 18
     ];
-    hud_lines[1] = storm.fx_list();
+    refresh_hud(&mut hud_lines, &storm);
 
     while !quit {
         // Resize: propagate host size to grid, renderer, and the child pty.
@@ -222,9 +243,9 @@ fn main() {
                                 if b == b'h' {
                                     // Ctrl+G h toggles the persistent HUD.
                                     hud_on = !hud_on;
-                                    hud_lines[0] = storm.status();
-                                } else if let Some(status) = dial(&mut storm, b) {
-                                    hud_lines[0] = status;
+                                    refresh_hud(&mut hud_lines, &storm);
+                                } else if dial(&mut storm, b) {
+                                    refresh_hud(&mut hud_lines, &storm);
                                 } else {
                                     if b == 0x1B && hud_on {
                                         esc_seq = 1; // Ctrl+G then arrow: don't eat the `[`
@@ -251,14 +272,13 @@ fn main() {
                                     storm.randomize_colors();
                                     continue;
                                 }
-                                if let Some(status) = dial(&mut storm, b) {
-                                    hud_lines[0] = status;
+                                if dial(&mut storm, b) {
+                                    refresh_hud(&mut hud_lines, &storm);
                                     continue;
                                 }
                                 // effect toggles (r t c k F e s g f h a m M)
                                 if storm.toggle_effect(b).is_some() {
-                                    hud_lines[0] = storm.status();
-                                    hud_lines[1] = storm.fx_list();
+                                    refresh_hud(&mut hud_lines, &storm);
                                     continue;
                                 }
                             }

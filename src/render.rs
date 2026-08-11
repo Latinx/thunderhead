@@ -88,26 +88,44 @@ impl Renderer {
 
     fn composite(&self, grid: &Grid, storm: &Storm, hud: Option<&[String]>, corona: f64, r: usize, c: usize) -> Cell {
         let base = grid.cell(r, c);
-        // the HUD panel floats over the bottom rows: only its text span is
+        // the HUD panel floats mid-right of the screen: only its text span is
         // replaced (inheriting the base bg like rain) — everything else keeps
-        // the base + storm composite, so the panel never becomes a
-        // full-width bar masking the weather behind it
+        // the base + storm composite. The palette swatch line renders its
+        // chips in the live storm colors.
         if let Some(lines) = hud {
-            let top = grid.rows.saturating_sub(lines.len());
-            if r >= top {
-                let line = &lines[r - top];
-                let len = line.chars().count();
-                let pad = grid.cols.saturating_sub(len) / 2;
-                if c >= pad && c - pad < len {
-                    let ch = line.chars().nth(c - pad).expect("in text span");
-                    return Cell {
-                        ch,
-                        fg: Color::Rgb(0x68, 0xA3, 0xE8),
-                        bg: base.bg,
-                        bold: true,
-                        reverse: false,
-                        width: 1,
-                    };
+            let panel_rows = lines.len();
+            if panel_rows <= grid.rows {
+                let top = (grid.rows - panel_rows) / 2;
+                let max_w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+                let left = grid.cols.saturating_sub(max_w + 2);
+                if r >= top && r < top + panel_rows && c >= left {
+                    let line = &lines[r - top];
+                    let ci = c - left;
+                    let len = line.chars().count();
+                    if ci < len {
+                        let ch = line.chars().nth(ci).expect("in text span");
+                        // swatch line: index 4, chips at chars 9, 11, 13, 15
+                        if r - top == 4 && ch == '●' && ci >= 9 && (ci - 9) % 2 == 0 {
+                            let sw = storm.swatch();
+                            let (sr, sg, sb) = sw[(ci - 9) / 2];
+                            return Cell {
+                                ch,
+                                fg: Color::Rgb(sr, sg, sb),
+                                bg: base.bg,
+                                bold: true,
+                                reverse: false,
+                                width: 1,
+                            };
+                        }
+                        return Cell {
+                            ch,
+                            fg: Color::Rgb(0x68, 0xA3, 0xE8),
+                            bg: base.bg,
+                            bold: true,
+                            reverse: false,
+                            width: 1,
+                        };
+                    }
                 }
             }
         }

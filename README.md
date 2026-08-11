@@ -47,9 +47,11 @@ Requires a real terminal (WSL/Linux/macOS; host-termios + `poll` code is
 Unix-only). Your shell (`$SHELL`) is spawned inside.
 
 - **Ctrl+Q Ctrl+Q** (twice within 1.2s) exits and restores the terminal.
-- **Ctrl+G h** toggles the storm control panel: live status, the enabled-effect
-  list, and the legend, pinned to the bottom of the screen. While the panel is
-  visible the controls are **armed — no Ctrl+G needed**:
+- **Ctrl+G h** toggles the storm control panel: a vertical control deck that
+  floats mid-right of the screen — live status (rain/speed/strike/meteor), a
+  **palette swatch** showing the current rain/spark/aurora/corona colors,
+  the enabled-effect list, and the legend. While the panel is visible the
+  controls are **armed — no Ctrl+G needed**:
   - `]` / `[` — rain density up / down
   - `=` / `-` — rain fall speed up / down
   - `.` / `,` — strike frequency up / down
