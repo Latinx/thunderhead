@@ -100,7 +100,7 @@ impl Grid {
             cursor_visible: true,
             last_char: ' ',
         };
-        g.set_scroll_region(1, rows);
+        g.set_scroll_region(0, rows.saturating_sub(1));
         g
     }
 
@@ -159,7 +159,12 @@ impl Grid {
         self.set(self.cursor_row, self.cursor_col, cell);
         self.last_char = ch;
         self.cursor_col += w as usize;
-        if self.cursor_col + 1 >= self.cols {
+        if self.cursor_col >= self.cols {
+            // DEC autowrap: only a write to the actual last column arms the
+            // wrap. Writing at cols-2 leaves the cursor at cols-1 with NO
+            // pending wrap — arming early made full-width lines emit a
+            // spurious LF after every redraw (omp's cascade).
+            self.cursor_col = self.cols - 1;
             self.wrap_next = true;
         } else {
             self.wrap_next = false;
@@ -494,5 +499,62 @@ mod wide_tests {
         g.print_char('|');
         assert_eq!(g.cell(0, 0).width, 1);
         assert_eq!(g.cursor_col, 1);
+    }
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::*;
+
+    #[test]
+    fn autowrap_arms_only_at_last_column() {
+        let mut g = Grid::new(24, 80);
+        // writing at col 78 (second-to-last) leaves the cursor at 78 with no
+        // pending wrap — the next char must land on col 79, not wrap
+        for _ in 0..78 {
+            g.print_char('x');
+        }
+        assert_eq!(g.cursor_col, 78);
+        assert!(!g.wrap_next);
+        g.print_char('y');
+        assert_eq!(g.cursor_col, 79);
+        assert!(!g.wrap_next);
+        assert_eq!(g.cell(0, 78).ch, 'y');
+        // writing the last column parks the cursor there and arms the wrap
+        g.print_char('z');
+        assert_eq!(g.cursor_col, 79);
+        assert!(g.wrap_next);
+        // the next char wraps to the following row
+        g.print_char('w');
+        assert_eq!(g.cursor_row, 1);
+        assert_eq!(g.cursor_col, 1);
+        assert!(!g.wrap_next);
+        assert_eq!(g.cell(1, 0).ch, 'w');
+    }
+
+    #[test]
+    fn full_width_line_redraw_stays_in_place() {
+        // the omp cascade repro: fill the whole row, then \r + reprint —
+        // the reprint must land on the SAME row (no spurious LF)
+        let mut g = Grid::new(24, 80);
+        for _ in 0..80 {
+            g.print_char('─');
+        }
+        assert!(g.wrap_next);
+        g.cr();
+        assert!(!g.wrap_next);
+        assert_eq!(g.cursor_col, 0);
+        g.print_char('x');
+        assert_eq!(g.cursor_row, 0);
+        assert_eq!(g.cursor_col, 1);
+        assert_eq!(g.cell(0, 0).ch, 'x');
+        assert_eq!(g.cell(1, 0).ch, ' '); // next row untouched
+    }
+
+    #[test]
+    fn default_scroll_region_covers_full_screen() {
+        let g = Grid::new(24, 80);
+        assert_eq!(g.scroll_top, 0);
+        assert_eq!(g.scroll_bottom, 23);
     }
 }
