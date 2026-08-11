@@ -160,32 +160,38 @@ impl Renderer {
             self.dirty_all = true;
             out.extend_from_slice(b"\x1b[2J\x1b[H");
         }
-        // Replay the grid's scrolls as real terminal scrolls so the host's
-        // scrollback captures the scrolled lines (the diff would otherwise
-        // repaint positions and starve the scrollback). `last` shifts to
-        // match so only the newly exposed rows repaint.
-        let scrolls = std::mem::take(&mut grid.scrolls);
-        if !scrolls.is_empty() {
-            let cols = grid.cols;
-            for s in &scrolls {
-                out.extend_from_slice(format!("\x1b[{};{}r", s.top + 1, s.bottom + 1).as_bytes());
-                let seq = if s.up {
-                    format!("\x1b[{}S", s.n)
-                } else {
-                    format!("\x1b[{}T", s.n)
-                };
-                out.extend_from_slice(seq.as_bytes());
-                out.extend_from_slice(b"\x1b[r");
-                if s.up {
-                    let count = (s.bottom - s.top + 1 - s.n) * cols;
-                    self.last.copy_within((s.top + s.n) * cols..(s.top + s.n) * cols + count, s.top * cols);
-                    self.last[(s.bottom - s.n + 1) * cols..(s.bottom + 1) * cols].fill(Cell::default());
-                } else {
-                    let count = (s.bottom - s.top + 1 - s.n) * cols;
-                    self.last.copy_within(s.top * cols..s.top * cols + count, (s.top + s.n) * cols);
-                    self.last[s.top * cols..(s.top + s.n) * cols].fill(Cell::default());
+        // Replay the grid's scrolled-off lines into the terminal so its
+        // scrollback captures the FULL history. A terminal only pushes the
+        // rows visible at scroll time into history, so a single big scroll
+        // event loses the content; instead we replay the lines the way a live
+        // stream would: fill top-to-bottom, then write at the bottom row and
+        // LF. Each LF pushes the current top row into the scrollback, so the
+        // lines land in order. The live screen is repainted afterwards.
+        let history = std::mem::take(&mut grid.history);
+        if !history.is_empty() {
+            out.extend_from_slice(b"\x1b[r"); // full-screen region for the LFs
+            // every line streams through the bottom row + LF, so each one
+            // scrolls into the terminal's history in order — a top-fill would
+            // let a later chunk overwrite the previous chunk's tail (losing
+            // ~24 lines per frame boundary during fast bursts)
+            for line in &history {
+                out.extend_from_slice(format!("\x1b[{};1H", grid.rows).as_bytes());
+                let mut cc = 0;
+                while cc < line.len() {
+                    let cell = line[cc];
+                    if cell.width == 0 {
+                        cc += 1;
+                        continue; // wide-char continuation: part of the pair
+                    }
+                    write_sgr(out, Style::of(cell), self.style);
+                    self.style = Style::of(cell);
+                    let mut buf = [0u8; 4];
+                    out.extend_from_slice(cell.ch.encode_utf8(&mut buf).as_bytes());
+                    cc += 1;
                 }
+                out.extend_from_slice(b"\n"); // push a line into the scrollback
             }
+            self.dirty_all = true; // replay scrambled the live screen; repaint
         }
 
         // corona tint level (0 when off) and screen shake — shake arms a full
