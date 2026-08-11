@@ -170,12 +170,13 @@ impl Renderer {
         let history = std::mem::take(&mut grid.history);
         if !history.is_empty() {
             out.extend_from_slice(b"\x1b[r"); // full-screen region for the LFs
-            // every line streams through the bottom row + LF, so each one
-            // scrolls into the terminal's history in order — a top-fill would
-            // let a later chunk overwrite the previous chunk's tail (losing
-            // ~24 lines per frame boundary during fast bursts)
+            // each line is staged at the TOP row, then a LF from the bottom
+            // row scrolls it into the terminal's history. The pushed line is
+            // the clean base text we just wrote — NOT the composited screen —
+            // so the scrollback reads as text, not storm cells frozen in time.
+            // Order is preserved and no line is lost at frame boundaries.
             for line in &history {
-                out.extend_from_slice(format!("\x1b[{};1H", grid.rows).as_bytes());
+                out.extend_from_slice(b"\x1b[1;1H");
                 let mut cc = 0;
                 while cc < line.len() {
                     let cell = line[cc];
@@ -189,7 +190,8 @@ impl Renderer {
                     out.extend_from_slice(cell.ch.encode_utf8(&mut buf).as_bytes());
                     cc += 1;
                 }
-                out.extend_from_slice(b"\n"); // push a line into the scrollback
+                out.extend_from_slice(format!("\x1b[{};1H", grid.rows).as_bytes());
+                out.extend_from_slice(b"\n"); // scroll the staged line into history
             }
             self.dirty_all = true; // replay scrambled the live screen; repaint
         }
