@@ -87,29 +87,30 @@ impl Renderer {
     }
 
     fn composite(&self, grid: &Grid, storm: &Storm, hud: Option<&[String]>, corona: f64, r: usize, c: usize) -> Cell {
-        // the transient storm HUD panel owns the bottom rows while visible;
-        // each line is horizontally centered on the grid
+        let base = grid.cell(r, c);
+        // the HUD panel floats over the bottom rows: only its text span is
+        // replaced (inheriting the base bg like rain) — everything else keeps
+        // the base + storm composite, so the panel never becomes a
+        // full-width bar masking the weather behind it
         if let Some(lines) = hud {
             let top = grid.rows.saturating_sub(lines.len());
             if r >= top {
                 let line = &lines[r - top];
-                let pad = grid.cols.saturating_sub(line.chars().count()) / 2;
-                if c >= pad {
-                    if let Some(ch) = line.chars().nth(c - pad) {
-                        return Cell {
-                            ch,
-                            fg: Color::Rgb(0x68, 0xA3, 0xE8),
-                            bg: Color::Default,
-                            bold: true,
-                            reverse: false,
-                            width: 1,
-                        };
-                    }
+                let len = line.chars().count();
+                let pad = grid.cols.saturating_sub(len) / 2;
+                if c >= pad && c - pad < len {
+                    let ch = line.chars().nth(c - pad).expect("in text span");
+                    return Cell {
+                        ch,
+                        fg: Color::Rgb(0x68, 0xA3, 0xE8),
+                        bg: base.bg,
+                        bold: true,
+                        reverse: false,
+                        width: 1,
+                    };
                 }
-                return Cell::default();
             }
         }
-        let base = grid.cell(r, c);
         match storm.overlay(base, r, c) {
             Some(o) => o,
             None => {
