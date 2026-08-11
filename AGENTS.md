@@ -34,13 +34,15 @@ host stdin (raw) ──► forwarded verbatim to pty ─────────
   DA1/DA2/DSR replies back to the child.
 - `src/storm.rs` — ambient rain + lightning overlay, a port of TTE's
   thunderstorm mechanics: fast single-glyph rain (`\ . ,`, light blue
-  `#aaaaff`, 30-90 cells/s), a `|` bolt that travels down with 5% branch
-  chance, bezier-flying sparks (`* . '`, orange `#ff4d00` cooling) on impact,
-  and struck text glowing orange `#EF5411` cooling back to base via a per-cell
-  glow map. `tick()` advances drops/bolt/sparks/glow; `overlay(base, row,
-  col, rows) -> Option<Cell>` composites. Structurally read-only w.r.t. the
-  grid. Rain colors render via `38;2;` RGB — do not regress the SGR prefix
-  bug (`b'3'` formats as 51 → invalid `518;2;` the terminal silently ignores).
+  `#aaaaff`, 30-90 cells/s; half the drops are wind-responsive and lean
+  `/`/`\` with gusts), a lightning FLASH — the full jagged polyline appears
+  at once, white-hot for ~0.18s, fading through wake tiers — with the text
+  heating by proximity (red/orange/yellow) and bezier rock sparks on impact.
+  `tick()` advances drops/bolt/sparks/glow; `overlay(base, row, col) ->
+  Option<Cell>` composites. Structurally read-only w.r.t. the grid. Storm
+  cells inherit `base.bg` so they don't punch through painted backgrounds.
+  Colors render via `38;2;` RGB — do not regress the SGR prefix bug
+  (`b'3'` formats as 51 → invalid `518;2;` the terminal silently ignores).
 - `src/render.rs` — diff renderer: composite = grid + storm per cell (storm
   wins by full cell replacement), reverse-video cursor overlay, emits only
   changed runs (`\x1b[r;cH` + SGR) into a per-frame buffer.

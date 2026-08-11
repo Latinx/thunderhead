@@ -26,7 +26,7 @@ const RAIN_SPEED_MIN: f64 = 30.0;
 const RAIN_SPEED_MAX: f64 = 90.0;
 const WIND_DRIFT: f64 = 12.0; // cells/s of horizontal drift at full wind
 const WIND_EPS: f64 = 0.15; // below this the rain falls vertically (`.`/`,`)
-const BOLT_TRAIL_TTL: f64 = 0.35; // seconds each bolt cell stays lit behind the head
+const BOLT_TTL: f64 = 0.18; // seconds the flash line stays lit (a real strike is ~1/10s)
 const GLOW_RADIUS: f64 = 12.0; // proximity radius of the strike glow (columns)
 const TIER_HIGH: f64 = 0.65; // KITT wake tier thresholds (omp shimmer)
 const TIER_MID: f64 = 0.22;
@@ -94,25 +94,8 @@ struct Drop {
 
 #[derive(Debug)]
 struct Bolt {
-    x: f64,
-    y: f64,
-    speed: f64,
-    /// discrete column of the last visited cell (for connector glyphs)
-    prev_col: i64,
-    /// the jagged polyline: (row, col, connector glyph, ttl)
+    /// the flash's jagged polyline: (row, col, connector glyph, ttl)
     path: Vec<(i64, i64, char, f64)>,
-    /// short tendrils forked off jogs
-    branches: Vec<Branch>,
-}
-
-#[derive(Debug)]
-struct Branch {
-    x: f64,
-    y: f64,
-    dir: i64,
-    speed: f64,
-    /// seconds remaining — forks are SHORT, they flare then die
-    life: f64,
 }
 
 #[derive(Debug)]
@@ -211,17 +194,42 @@ impl Storm {
         self.drops.push(Drop { col, row, speed, glyph: vertical, vertical, leanable });
     }
 
-    fn strike(&mut self, cols: usize) {
-        let x = self.rand() * cols as f64;
-        let speed = 15.0 + self.rand() * 15.0; // rows/s: visible ~1-1.6s travel
-        self.bolt = Some(Bolt {
-            x,
-            y: -1.0,
-            speed,
-            prev_col: x.floor() as i64,
-            path: Vec::new(),
-            branches: Vec::new(),
-        });
+    /// Strike: the whole jagged bolt appears at once (a real flash is ~1/10s),
+    /// and the text heats + rocks burst the same instant it lands.
+    fn strike(&mut self, cols: usize, rows: usize) {
+        let mut x = (1 + (self.rand() * (cols.saturating_sub(2) as f64)) as i64).max(0);
+        let mut prev = x;
+        let mut path: Vec<(i64, i64, char, f64)> = Vec::new();
+        for r in 0..rows {
+            if r > 0 && self.rand() < 0.45 && x > 0 && x + 1 < cols as i64 {
+                x += if self.rand() < 0.5 { 1 } else { -1 };
+            }
+            let glyph = if x == prev {
+                '|'
+            } else if x > prev {
+                '\\'
+            } else {
+                '/'
+            };
+            path.push((r as i64, x, glyph, BOLT_TTL));
+            // short horizontal tendrils fork off along the way
+            if self.rand() < 0.20 {
+                let dir: i64 = if self.rand() < 0.5 { 1 } else { -1 };
+                let len = 2 + (self.rand() * 4.0) as i64;
+                for i in 1..=len {
+                    let bx = x + dir * i;
+                    if bx < 0 || bx >= cols as i64 {
+                        break;
+                    }
+                    path.push((r as i64, bx, '-', BOLT_TTL));
+                }
+            }
+            prev = x;
+        }
+        self.bolt = Some(Bolt { path });
+        // impact at the bottom of the bolt
+        self.impact(x as f64, rows);
+        self.next_strike = self.t + 4.5 + self.rand() * 3.5;
     }
 
     /// Advance the wind toward a target that re-rolls periodically (gusts).
@@ -233,67 +241,6 @@ impl Storm {
         self.wind += (self.wind_target - self.wind) * dt * 1.2;
         if self.wind.abs() < 0.01 {
             self.wind = 0.0;
-        }
-    }
-
-    /// Advance the bolt one step. Returns true if it's still falling (the
-    /// caller restores it), false if it impacted (consumed).
-    fn advance_bolt(&mut self, b: &mut Bolt, dt: f64, cols: usize, rows: usize) -> bool {
-        let start_row = b.y.floor() as i64;
-        b.y += b.speed * dt;
-        let end_row = b.y.floor() as i64;
-        // walk the head cell by cell through the rows it crossed, jinking
-        // left/right so the path reads as jagged lightning, not a column
-        for row in (start_row + 1).max(0)..=end_row.max(0) {
-            if self.rand() < 0.32 && b.x > 0.5 && b.x < cols as f64 - 1.5 {
-                let dir = if self.rand() < 0.5 { 1 } else { -1 };
-                b.x = (b.x + dir as f64).clamp(0.0, cols as f64 - 1.0);
-                // sometimes a short tendril forks back the other way
-                if self.rand() < 0.25 {
-                    b.branches.push(Branch {
-                        x: b.x - dir as f64,
-                        y: row as f64,
-                        dir: -dir,
-                        speed: 6.0 + self.rand() * 10.0,
-                        life: 0.3 + self.rand() * 0.2,
-                    });
-                }
-            }
-            let new_col = b.x.floor() as i64;
-            let glyph = if new_col == b.prev_col {
-                '|'
-            } else if new_col > b.prev_col {
-                '\\'
-            } else {
-                '/'
-            };
-            b.path.push((row, new_col, glyph, BOLT_TRAIL_TTL));
-            b.prev_col = new_col;
-        }
-        // branches: short tendrils drifting outward and down, then dying
-        for br in b.branches.iter_mut() {
-            br.life -= dt;
-            let start = br.y.floor() as i64;
-            br.y += br.speed * dt;
-            br.x += br.dir as f64 * br.speed * 0.3 * dt;
-            let end = br.y.floor() as i64;
-            let glyph = if br.dir > 0 { '\\' } else { '/' };
-            for row in (start + 1).max(0)..=end.max(0) {
-                let c = br.x.floor() as i64;
-                b.path.push((row, c, glyph, BOLT_TRAIL_TTL * 0.8));
-            }
-        }
-        b.branches.retain(|br| br.life > 0.0);
-        // decay the wake
-        for (_, _, _, ttl) in b.path.iter_mut() {
-            *ttl -= dt;
-        }
-        b.path.retain(|&(_, _, _, ttl)| ttl > 0.0);
-        if b.y >= rows as f64 - 1.0 {
-            self.impact(b.x, rows);
-            false
-        } else {
-            true
         }
     }
 
@@ -359,15 +306,17 @@ impl Storm {
         }
         self.drops.retain(|d| d.row < rows as f64 + 1.0);
 
-        // lightning: strike, travel down, branch, impact
+        // lightning: an instant full-line flash, then the line fades
         if self.bolt.is_none() && self.t >= self.next_strike {
-            self.strike(cols);
-            self.next_strike = self.t + 4.5 + self.rand() * 3.5;
+            self.strike(cols, rows);
         }
-        // take the bolt out so rng/impact calls don't fight the borrow
-        if let Some(mut b) = self.bolt.take() {
-            if self.advance_bolt(&mut b, dt, cols, rows) {
-                self.bolt = Some(b);
+        if let Some(b) = &mut self.bolt {
+            for (_, _, _, ttl) in b.path.iter_mut() {
+                *ttl -= dt;
+            }
+            b.path.retain(|&(_, _, _, ttl)| ttl > 0.0);
+            if b.path.is_empty() {
+                self.bolt = None;
             }
         }
 
@@ -389,28 +338,23 @@ impl Storm {
 
     /// The composite cell at (row, col): the storm's take on the base cell.
     pub fn overlay(&self, base: Cell, row: usize, col: usize) -> Option<Cell> {
-        // lightning bolt: jagged polyline (| \ / connectors) with a white head
-        // and a KITT-style quadratic-decay wake (ported from omp's shimmer)
+        // lightning flash: the whole jagged line appears at once, white-hot,
+        // fading through the wake tiers; keeps the base background so it
+        // doesn't punch through painted backgrounds (e.g. nvim)
         if let Some(b) = &self.bolt {
-            let head_row = b.y.floor() as i64;
-            let head_col = b.x.floor() as i64;
             for &(tr, tc, glyph, ttl) in &b.path {
                 if tr == row as i64 && tc == col as i64 {
-                    if tr == head_row && tc == head_col {
-                        return Some(Cell {
-                            ch: glyph,
-                            fg: Color::Rgb(0xFF, 0xFF, 0xFF),
-                            bg: Color::Default,
-                            bold: true,
-                            reverse: false,
-                        });
-                    }
-                    let age = (1.0 - ttl / BOLT_TRAIL_TTL).max(0.0).min(1.0);
-                    let (fg, bold) = wake_tier(kitt_intensity(age));
+                    let age = (1.0 - ttl / BOLT_TTL).max(0.0).min(1.0);
+                    let intensity = kitt_intensity(age);
+                    let (fg, bold) = if intensity >= 0.8 {
+                        (Color::Rgb(0xFF, 0xFF, 0xFF), true) // fresh flash: white
+                    } else {
+                        wake_tier(intensity)
+                    };
                     return Some(Cell {
                         ch: glyph,
                         fg,
-                        bg: Color::Default,
+                        bg: base.bg,
                         bold,
                         reverse: false,
                     });
@@ -418,7 +362,7 @@ impl Storm {
             }
         }
 
-        // sparks: flying glyphs cooling from orange
+        // sparks: flying glyphs cooling from orange; keep the base background
         for s in &self.sparks {
             let (x, y) = self.spark_pos(s);
             if y.floor() as usize == row && x.floor() as usize == col {
@@ -430,7 +374,7 @@ impl Storm {
                 return Some(Cell {
                     ch: s.glyph,
                     fg: Color::Rgb(lerp(sr, 0x28, cool), lerp(sg, 0x30, cool), lerp(sb, 0x40, cool)),
-                    bg: Color::Default,
+                    bg: base.bg,
                     bold: s.glyph == '*',
                     reverse: false,
                 });
