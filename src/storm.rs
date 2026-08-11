@@ -22,8 +22,6 @@ use crate::grid::{Cell, Color};
 // ─── Tunables ───────────────────────────────────────────────────────────────
 const RAIN_COLOR: Color = Color::Rgb(0xAA, 0xAA, 0xFF);
 const SPARK_COLOR: Color = Color::Rgb(0xFF, 0x4D, 0x00);
-const RAIN_SPEED_MIN: f64 = 30.0;
-const RAIN_SPEED_MAX: f64 = 90.0;
 const WIND_DRIFT: f64 = 12.0; // cells/s of horizontal drift at full wind
 const WIND_EPS: f64 = 0.15; // below this the rain falls vertically (`.`/`,`)
 const BOLT_TTL: f64 = 0.5; // seconds the flash line stays lit — instant to appear, but it lingers long enough to read
@@ -127,6 +125,10 @@ pub struct Storm {
     wind_target: f64,
     next_gust: f64,
     spark_glyphs: [char; 4],
+    /// live dials (Ctrl+G + key in the running terminal)
+    rain_density: f64,          // fraction of columns with falling rain
+    rain_speed: (f64, f64),     // (min, max) cells/s
+    strike_interval: (f64, f64), // (min, max) seconds between strikes
 }
 
 impl Storm {
@@ -145,6 +147,9 @@ impl Storm {
             wind_target: 0.0,
             next_gust: 3.0,
             spark_glyphs: ['*', '.', '\'', 'o'],
+            rain_density: 0.45,
+            rain_speed: (30.0, 90.0),
+            strike_interval: (4.5, 8.0),
         }
     }
 
@@ -157,6 +162,31 @@ impl Storm {
         self.rng = x;
         let out = x.wrapping_mul(0x2545F4914F6CDD1D);
         (out >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    // ─── live dials (Ctrl+G + key) ─────────────────────────────────────────
+
+    /// `[` / `]` — rain density, clamped to 10-90% of columns.
+    pub fn dial_density(&mut self, dir: f64) {
+        self.rain_density = (self.rain_density + 0.1 * dir).clamp(0.1, 0.9);
+    }
+
+    /// `-` / `=` — rain fall speed, ±25% per step, clamped to sane bounds.
+    pub fn dial_speed(&mut self, dir: f64) {
+        let f = 1.0 + 0.25 * dir;
+        self.rain_speed =
+            ((self.rain_speed.0 * f).clamp(5.0, 200.0), (self.rain_speed.1 * f).clamp(10.0, 300.0));
+    }
+
+    /// `,` / `.` — strike frequency, ∓20% on the interval per step.
+    pub fn dial_strike(&mut self, dir: f64) {
+        let f = 1.0 + 0.2 * dir;
+        self.strike_interval = ((self.strike_interval.0 * f).clamp(1.0, 15.0), (self.strike_interval.1 * f).clamp(2.0, 25.0));
+    }
+
+    /// `b` — force a strike on the next tick.
+    pub fn force_strike(&mut self) {
+        self.next_strike = self.t;
     }
 
     fn ensure_glow(&mut self, rows: usize, cols: usize) {
@@ -187,7 +217,7 @@ impl Storm {
     fn spawn_drop(&mut self, cols: usize, rows: usize) {
         let col = self.rand() * cols as f64;
         let row = -(rows as f64) * self.rand() * 0.4; // start above the screen
-        let speed = RAIN_SPEED_MIN + self.rand() * (RAIN_SPEED_MAX - RAIN_SPEED_MIN);
+        let speed = self.rain_speed.0 + self.rand() * (self.rain_speed.1 - self.rain_speed.0);
         let vertical = if self.rand() < 0.5 { '.' } else { ',' };
         // half the drops always fall straight; half lean with the wind
         let leanable = self.rand() < 0.5;
@@ -229,7 +259,8 @@ impl Storm {
         self.bolt = Some(Bolt { path });
         // impact at the bottom of the bolt
         self.impact(x as f64, rows);
-        self.next_strike = self.t + 4.5 + self.rand() * 3.5;
+        let (lo, hi) = self.strike_interval;
+        self.next_strike = self.t + lo + self.rand() * (hi - lo);
     }
 
     /// Advance the wind toward a target that re-rolls periodically (gusts).
@@ -287,8 +318,8 @@ impl Storm {
 
         self.gust(dt);
 
-        // rain: ~45% of columns, fast TTE-style drops
-        let target = ((cols as f64) * 0.45).max(4.0) as usize;
+        // rain: fast TTE-style drops across a dialable share of columns
+        let target = ((cols as f64) * self.rain_density).max(4.0) as usize;
         while self.drops.len() < target {
             self.spawn_drop(cols, rows);
         }
@@ -475,5 +506,40 @@ mod wide_overlay_tests {
         assert_eq!(s.overlay(cont, 0, 5), None, "storm must not draw on a continuation");
         let normal = Cell { ch: 'a', ..Cell::default() };
         assert!(s.overlay(normal, 0, 5).is_some(), "storm draws on normal cells");
+    }
+}
+
+#[cfg(test)]
+mod dial_tests {
+    use super::*;
+
+    #[test]
+    fn dials_clamp() {
+        let mut s = Storm::new();
+        for _ in 0..50 {
+            s.dial_density(1.0);
+        }
+        assert!(s.rain_density <= 0.9);
+        for _ in 0..100 {
+            s.dial_density(-1.0);
+        }
+        assert!(s.rain_density >= 0.1);
+        for _ in 0..100 {
+            s.dial_speed(1.0);
+        }
+        assert!(s.rain_speed.1 <= 300.0);
+        for _ in 0..100 {
+            s.dial_strike(-1.0);
+        }
+        assert!(s.strike_interval.0 >= 1.0);
+    }
+
+    #[test]
+    fn force_strike_arms_immediately() {
+        let mut s = Storm::new();
+        s.t = 100.0;
+        s.next_strike = 500.0;
+        s.force_strike();
+        assert_eq!(s.next_strike, s.t);
     }
 }

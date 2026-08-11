@@ -47,6 +47,11 @@ Requires a real terminal (WSL/Linux/macOS; host-termios + `poll` code is
 Unix-only). Your shell (`$SHELL`) is spawned inside.
 
 - **Ctrl+Q Ctrl+Q** (twice within 1.2s) exits and restores the terminal.
+- **Ctrl+G** then a key adjusts the storm live:
+  - `]` / `[` — rain density up / down
+  - `=` / `-` — rain fall speed up / down
+  - `.` / `,` — strike frequency up / down
+  - `b` — force a lightning strike now
 - The terminal is restored on SIGTERM/SIGHUP/SIGINT too.
 
 ## Controls & notes

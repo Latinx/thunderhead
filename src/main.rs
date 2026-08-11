@@ -131,6 +131,7 @@ fn main() {
     let mut last_frame = Instant::now();
     let mut quit = false;
     let mut q_times: Vec<Instant> = Vec::new();
+    let mut dial_pending = false;
 
     while !quit {
         // Resize: propagate host size to grid, renderer, and the child pty.
@@ -167,7 +168,29 @@ fn main() {
                 match stdin.read(&mut buf) {
                     Ok(0) => quit = true,
                     Ok(n) => {
+                        let mut forwarded = Vec::with_capacity(n);
                         for &b in &buf[..n] {
+                            if dial_pending {
+                                // Ctrl+G then a key: live storm dials.
+                                dial_pending = false;
+                                match b {
+                                    b']' => storm.dial_density(1.0),
+                                    b'[' => storm.dial_density(-1.0),
+                                    b'=' => storm.dial_speed(1.0),
+                                    b'-' => storm.dial_speed(-1.0),
+                                    b'.' => storm.dial_strike(1.0),
+                                    b',' => storm.dial_strike(-1.0),
+                                    b'b' => storm.force_strike(),
+                                    _ => forwarded.push(b), // not a dial: pass through
+                                }
+                                continue;
+                            }
+                            if b == 0x07 {
+                                // Ctrl+G arms the dial menu (and is otherwise
+                                // the bell — the child never needs it).
+                                dial_pending = true;
+                                continue;
+                            }
                             if b == 0x11 {
                                 // Ctrl+Q twice within 1.2s exits the storm.
                                 let now = Instant::now();
@@ -177,8 +200,11 @@ fn main() {
                                     quit = true;
                                 }
                             }
+                            forwarded.push(b);
                         }
-                        let _ = writer.write_all(&buf[..n]);
+                        if !forwarded.is_empty() {
+                            let _ = writer.write_all(&forwarded);
+                        }
                     }
                     Err(_) => {}
                 }
