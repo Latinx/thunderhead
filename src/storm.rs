@@ -357,6 +357,7 @@ impl Storm {
                         bg: base.bg,
                         bold,
                         reverse: false,
+                        width: 1,
                     });
                 }
             }
@@ -377,6 +378,7 @@ impl Storm {
                     bg: base.bg,
                     bold: s.glyph == '*',
                     reverse: false,
+                    width: 1,
                 });
             }
         }
@@ -403,6 +405,7 @@ impl Storm {
                     bg: base.bg,
                     bold: false,
                     reverse: false,
+                    width: 1,
                 });
             }
         }

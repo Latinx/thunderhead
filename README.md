@@ -54,7 +54,7 @@ Unix-only). Your shell (`$SHELL`) is spawned inside.
 - Enter the alternate screen on start; leave it cleanly on exit.
 - Known limitations: no scrollback (scrolling discards rows), tab stops
   hardcoded every 8, application cursor keys (DECCKM) accepted-but-ignored,
-  wide/CJK chars render as width-1.
+  
 
 ## Design
 

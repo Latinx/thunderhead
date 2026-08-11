@@ -21,11 +21,35 @@ pub struct Cell {
     pub bg: Color,
     pub bold: bool,
     pub reverse: bool,
+    /// cell width: 2 = wide char, 1 = normal, 0 = continuation of a wide char
+    pub width: u8,
 }
 
 impl Default for Cell {
     fn default() -> Self {
-        Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false }
+        Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 1 }
+    }
+}
+
+/// Cell width for a char: 2 for wide ranges (CJK, Hangul, fullwidth, emoji),
+/// 1 otherwise. A static table rather than wcwidth — wcwidth depends on the
+/// process locale and returns 1 for CJK unless a UTF-8 locale is set.
+fn char_width(ch: char) -> u8 {
+    let c = ch as u32;
+    let wide = (0x1100..=0x115F).contains(&c) // Hangul jamo
+        || (0x2E80..=0xA4CF).contains(&c) // CJK radicals, punctuation, Hira/Kana, Han, Yi
+        || (0xAC00..=0xD7A3).contains(&c) // Hangul syllables
+        || (0xF900..=0xFAFF).contains(&c) // CJK compatibility
+        || (0xFE30..=0xFE4F).contains(&c) // CJK compatibility forms
+        || (0xFF00..=0xFF60).contains(&c) // fullwidth forms
+        || (0xFFE0..=0xFFE6).contains(&c)
+        || (0x1F000..=0x1FAFF).contains(&c) // emoji
+        || (0x2600..=0x27BF).contains(&c) // misc symbols
+        || (0x20000..=0x3FFFD).contains(&c); // CJK Ext B+
+    if wide {
+        2
+    } else {
+        1
     }
 }
 
@@ -118,19 +142,27 @@ impl Grid {
             self.wrap_next = false;
             self.newline();
         }
+        let w = char_width(ch);
+        if w == 2 && self.cursor_col + 1 >= self.cols {
+            // a wide char doesn't fit at the last column; terminals drop it
+            self.wrap_next = true;
+            return;
+        }
         let cell = Cell {
             ch,
             fg: self.cur_fg,
             bg: self.cur_bg,
             bold: self.cur_bold,
             reverse: self.cur_reverse,
+            width: w,
         };
-        self.cells[cell_index(self.cols, self.cursor_row, self.cursor_col)] = cell;
+        self.set(self.cursor_row, self.cursor_col, cell);
         self.last_char = ch;
+        self.cursor_col += w as usize;
         if self.cursor_col + 1 >= self.cols {
             self.wrap_next = true;
         } else {
-            self.cursor_col += 1;
+            self.wrap_next = false;
         }
     }
 
@@ -189,7 +221,7 @@ impl Grid {
         }
         for r in (self.scroll_bottom - n + 1)..=self.scroll_bottom {
             for c in 0..self.cols {
-                self.cells[cell_index(self.cols, r, c)] = self.cleared();
+                self.set(r, c, self.cleared());
             }
         }
     }
@@ -204,7 +236,7 @@ impl Grid {
         }
         for r in self.scroll_top..(self.scroll_top + n) {
             for c in 0..self.cols {
-                self.cells[cell_index(self.cols, r, c)] = self.cleared();
+                self.set(r, c, self.cleared());
             }
         }
     }
@@ -213,35 +245,60 @@ impl Grid {
     /// semantics — apps like nvim clear the whole screen to their bg, so
     /// empty cells must keep it rather than fall back to default).
     fn cleared(&self) -> Cell {
-        Cell { ch: ' ', fg: Color::Default, bg: self.cur_bg, bold: false, reverse: false }
+        Cell { ch: ' ', fg: Color::Default, bg: self.cur_bg, bold: false, reverse: false, width: 1 }
+    }
+
+    /// The blank second column of a wide char — never independently writable.
+    fn continuation() -> Cell {
+        Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 0 }
+    }
+
+    /// The single write path. Maintains the wide-char invariant:
+    ///   - writing into a continuation first clears the wide char to its left
+    ///   - replacing a wide char clears its continuation
+    ///   - placing a width-2 char lays down its continuation
+    fn set(&mut self, r: usize, c: usize, cell: Cell) {
+        let i = cell_index(self.cols, r, c);
+        if c > 0 && cell.width >= 1 && self.cells[i].width == 0 {
+            // target is the second column of a wide char: clear the wide char
+            self.cells[cell_index(self.cols, r, c - 1)] = self.cleared();
+        }
+        if self.cells[i].width == 2 && c + 1 < self.cols {
+            // replacing a wide char: its continuation must go too
+            self.cells[cell_index(self.cols, r, c + 1)] = self.cleared();
+        }
+        self.cells[i] = cell;
+        if cell.width == 2 && c + 1 < self.cols {
+            self.cells[cell_index(self.cols, r, c + 1)] = Self::continuation();
+        }
     }
 
     pub fn erase_display(&mut self, mode: i64) {
         match mode {
             0 => {
                 for c in self.cursor_col..self.cols {
-                    self.cells[cell_index(self.cols, self.cursor_row, c)] = self.cleared();
+                    self.set(self.cursor_row, c, self.cleared());
                 }
                 for r in (self.cursor_row + 1)..self.rows {
                     for c in 0..self.cols {
-                        self.cells[cell_index(self.cols, r, c)] = self.cleared();
+                        self.set(r, c, self.cleared());
                     }
                 }
             }
             1 => {
                 for c in 0..=self.cursor_col {
-                    self.cells[cell_index(self.cols, self.cursor_row, c)] = self.cleared();
+                    self.set(self.cursor_row, c, self.cleared());
                 }
                 for r in 0..self.cursor_row {
                     for c in 0..self.cols {
-                        self.cells[cell_index(self.cols, r, c)] = self.cleared();
+                        self.set(r, c, self.cleared());
                     }
                 }
             }
             _ => {
                 for r in 0..self.rows {
                     for c in 0..self.cols {
-                        self.cells[cell_index(self.cols, r, c)] = self.cleared();
+                        self.set(r, c, self.cleared());
                     }
                 }
             }
@@ -252,17 +309,17 @@ impl Grid {
         match mode {
             0 => {
                 for c in self.cursor_col..self.cols {
-                    self.cells[cell_index(self.cols, self.cursor_row, c)] = self.cleared();
+                    self.set(self.cursor_row, c, self.cleared());
                 }
             }
             1 => {
                 for c in 0..=self.cursor_col {
-                    self.cells[cell_index(self.cols, self.cursor_row, c)] = self.cleared();
+                    self.set(self.cursor_row, c, self.cleared());
                 }
             }
             _ => {
                 for c in 0..self.cols {
-                    self.cells[cell_index(self.cols, self.cursor_row, c)] = self.cleared();
+                    self.set(self.cursor_row, c, self.cleared());
                 }
             }
         }
@@ -271,7 +328,7 @@ impl Grid {
     pub fn erase_chars(&mut self, n: usize) {
         let end = (self.cursor_col + n).min(self.cols);
         for c in self.cursor_col..end {
-            self.cells[cell_index(self.cols, self.cursor_row, c)] = self.cleared();
+            self.set(self.cursor_row, c, self.cleared());
         }
     }
 
@@ -283,7 +340,7 @@ impl Grid {
             self.cells[dst] = self.cells[src];
         }
         for c in self.cursor_col..(self.cursor_col + n).min(self.cols) {
-            self.cells[cell_index(self.cols, self.cursor_row, c)] = Cell::default();
+            self.set(self.cursor_row, c, self.cleared());
         }
     }
 
@@ -295,7 +352,7 @@ impl Grid {
             self.cells[dst] = self.cells[src];
         }
         for c in (self.cols - n)..self.cols {
-            self.cells[cell_index(self.cols, self.cursor_row, c)] = Cell::default();
+            self.set(self.cursor_row, c, self.cleared());
         }
     }
 
@@ -381,5 +438,61 @@ mod tests {
     fn fresh_grid_has_default_bg() {
         let g = Grid::new(5, 10);
         assert_eq!(g.cell(0, 0).bg, Color::Default);
+    }
+}
+
+#[cfg(test)]
+mod wide_tests {
+    use super::*;
+
+    #[test]
+    fn wide_char_places_continuation() {
+        let mut g = Grid::new(3, 10);
+        g.print_char('界'); // width 2
+        assert_eq!(g.cell(0, 0).ch, '界');
+        assert_eq!(g.cell(0, 0).width, 2);
+        assert_eq!(g.cell(0, 1).width, 0, "second column must be a continuation");
+        assert_eq!(g.cursor_col, 2, "cursor advances by the char's width");
+    }
+
+    #[test]
+    fn overwriting_wide_char_clears_continuation() {
+        let mut g = Grid::new(3, 10);
+        g.print_char('界');
+        g.move_to(0, 0);
+        g.print_char('a');
+        assert_eq!(g.cell(0, 0).ch, 'a');
+        assert_eq!(g.cell(0, 0).width, 1);
+        assert_eq!(g.cell(0, 1).width, 1, "continuation must be cleared");
+        assert_ne!(g.cell(0, 1).width, 0);
+    }
+
+    #[test]
+    fn writing_into_continuation_clears_wide_char() {
+        let mut g = Grid::new(3, 10);
+        g.print_char('界');
+        g.move_to(0, 1);
+        g.print_char('b');
+        assert_eq!(g.cell(0, 0).width, 1, "wide char to the left must be cleared");
+        assert_eq!(g.cell(0, 1).ch, 'b');
+        assert_eq!(g.cell(0, 1).width, 1);
+    }
+
+    #[test]
+    fn erase_over_wide_char_clears_both() {
+        let mut g = Grid::new(3, 10);
+        g.print_char('界');
+        g.erase_line(2);
+        for c in 0..10 {
+            assert_eq!(g.cell(0, c).width, 1, "no stale continuations after erase");
+        }
+    }
+
+    #[test]
+    fn ascii_is_width_one() {
+        let mut g = Grid::new(2, 5);
+        g.print_char('|');
+        assert_eq!(g.cell(0, 0).width, 1);
+        assert_eq!(g.cursor_col, 1);
     }
 }

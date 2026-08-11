@@ -118,15 +118,24 @@ impl Renderer {
                 }
                 self.row_buf[c] = cell;
             }
-            // emit changed runs
+            // emit changed runs; continuation cells (width 0) are never
+            // written on their own — they're part of the wide char to their
+            // left, so skip them in the scan
             let mut c = 0;
             while c < grid.cols {
+                if self.row_buf[c].width == 0 {
+                    c += 1;
+                    continue;
+                }
                 if !full && self.row_buf[c] == self.last[r * grid.cols + c] {
                     c += 1;
                     continue;
                 }
                 let start = c;
-                while c < grid.cols && (full || self.row_buf[c] != self.last[r * grid.cols + c]) {
+                while c < grid.cols
+                    && self.row_buf[c].width != 0
+                    && (full || self.row_buf[c] != self.last[r * grid.cols + c])
+                {
                     c += 1;
                 }
                 let pos = format!("\x1b[{};{}H", r + 1, start + 1);
@@ -138,6 +147,11 @@ impl Renderer {
                     let mut buf = [0u8; 4];
                     out.extend_from_slice(cell.ch.encode_utf8(&mut buf).as_bytes());
                     self.last[r * grid.cols + cc] = cell;
+                    if cell.width == 2 && cc + 1 < grid.cols {
+                        // the terminal renders the second column as part of
+                        // the glyph — record the continuation in `last`
+                        self.last[r * grid.cols + cc + 1] = self.row_buf[cc + 1];
+                    }
                 }
             }
         }

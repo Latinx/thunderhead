@@ -119,5 +119,5 @@ Dependencies (all caret ranges): `libc 0.2`, `vte 0.14` (VT parser; note
 - Known WIP limitations (do not be surprised by these): no scrollback
   (scrolling discards rows); tab stops hardcoded every 8; application cursor
   keys (DECCKM) accepted-but-ignored; DA1 reply is `\x1b[?6c` (nonstandard,
-  cosmetic); storm `overlay` is O(rows×cols×drops) per frame; wide/CJK chars
-  render as width-1; renderer emits a reset SGR on every style change.
+  cosmetic); storm `overlay` is O(rows×cols×drops) per frame; renderer
+  emits a reset SGR on every style change.
