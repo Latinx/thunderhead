@@ -38,16 +38,19 @@ host stdin (raw) ──► forwarded verbatim to pty ─────────
   `/`/`\` with gusts), a lightning FLASH — the full jagged polyline appears
   at once, white-hot for ~0.18s, fading through wake tiers — with the text
   heating by proximity (red/orange/yellow) and bezier rock sparks on impact.
-  Eleven toggleable effects (panel keys `r t c k F e s g f h a m`,
+  Twelve toggleable effects (panel keys `r t c k F e s g f h a m M`,
   `r` = rain on/off): drop trails, corona tint, screen shake, forked
-  bolts + halo, ember crawl, splash rings, gust bands, fog bands, hail,
-  aurora (wavy curtains that bloom a glow into the bg instead of
-  inheriting it), matrix (halfwidth katakana rain). All overlay-only;
-  `tick()` advances drops/bolt/sparks/glow/front/rings/embers/clocks;
-  `overlay(base, row, col) -> Option<Cell>` composites. Structurally
-  read-only w.r.t. the grid. Storm cells inherit `base.bg` — except the
-  aurora, which paints a dim hue into the background for its glow.
-  Colors render via `38;2;` RGB — do not regress the SGR prefix bug
+  bolts + halo, ember crawl, splash rings, gust bands (glowing leading
+  edge), fog bands (wavy glowing haze that dims text), hail, aurora
+  (wavy curtains that bloom a glow into the bg instead of inheriting
+  it), matrix (halfwidth katakana rain), meteors (diagonal streaks
+  with white-hot heads and tapering ember trails). All overlay-only;
+  `tick()` advances drops/bolt/sparks/glow/front/rings/embers/meteors/
+  clocks; `overlay(base, row, col) -> Option<Cell>` composites.
+  Structurally read-only w.r.t. the grid. Storm cells inherit
+  `base.bg` — except the aurora, fog, front edge, and meteor heads,
+  which paint a dim hue into the background for their glow. Colors
+  render via `38;2;` RGB — do not regress the SGR prefix bug
   (`b'3'` formats as 51 → invalid `518;2;` the terminal silently
   ignores).
 - `src/render.rs` — diff renderer: composite = grid + storm per cell (storm

@@ -159,7 +159,7 @@ fn main() {
         String::new(),
         String::new(), // fx line, filled once the storm exists
         "r rain  t trails  c corona  k shake  F forks  e embers".to_string(),
-        "s splash  g fronts  f fog  h hail  a aurora  m matrix".to_string(),
+        "s splash  g fronts  f fog  h hail  a aurora  m matrix  M meteors".to_string(),
         "dials: ] / [ density  = / - speed  . / , strikes  b bolt   Ctrl+G h close".to_string(),
     ];
     hud_lines[1] = storm.fx_list();

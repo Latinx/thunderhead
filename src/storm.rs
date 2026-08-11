@@ -117,6 +117,18 @@ struct Spark {
     glyph: char,
 }
 
+/// A meteor: a bright diagonal streak with a tapering ember trail.
+#[derive(Debug)]
+struct Meteor {
+    x0: f64,
+    y0: f64, // start (above the screen)
+    dx: f64,
+    dy: f64, // velocity, cells/s
+    t: f64,  // 0..1 progress along the full path
+    dur: f64,
+    len: f64, // trail length in cells
+}
+
 pub struct Storm {
     drops: Vec<Drop>,
     bolt: Option<Bolt>,
@@ -150,6 +162,7 @@ pub struct Storm {
     fx_hail: bool,
     fx_aurora: bool,
     fx_matrix: bool,
+    fx_meteor: bool,
     // effect state
     shake: f64,                  // 0..1 post-strike screen shake
     fog_t: f64,                  // fog drift clock
@@ -158,6 +171,8 @@ pub struct Storm {
     next_front: f64,
     rings: Vec<(usize, usize, f64)>, // splash rings: (row, col, t 0..1)
     embers: Vec<(f64, f64, f64, f64, f64)>, // (row, col, dir, life, dur)
+    meteors: Vec<Meteor>,
+    next_meteor: f64,
     rows: usize,                 // last tick's canvas height (fog band needs it)
 }
 
@@ -193,6 +208,7 @@ impl Storm {
             fx_hail: false,
             fx_aurora: false,
             fx_matrix: false,
+            fx_meteor: false,
             shake: 0.0,
             fog_t: 0.0,
             aurora_t: 0.0,
@@ -200,6 +216,8 @@ impl Storm {
             next_front: 8.0,
             rings: Vec::new(),
             embers: Vec::new(),
+            meteors: Vec::new(),
+            next_meteor: 4.0,
             rows: 0,
         }
     }
@@ -287,6 +305,10 @@ impl Storm {
                 self.fx_aurora = !self.fx_aurora;
                 Some("aurora")
             }
+            b'M' => {
+                self.fx_meteor = !self.fx_meteor;
+                Some("meteors")
+            }
             b'm' => {
                 self.fx_matrix = !self.fx_matrix;
                 self.drops.clear(); // respawn as katakana (or back to rain)
@@ -331,6 +353,9 @@ impl Storm {
         }
         if self.fx_aurora {
             on.push("aurora");
+        }
+        if self.fx_meteor {
+            on.push("meteors");
         }
         if self.fx_matrix {
             on.push("matrix");
@@ -661,6 +686,50 @@ impl Storm {
             e.3 += dt;
         }
         self.embers.retain(|e| e.3 < e.4);
+
+        // meteors: occasional bright streaks, rare and dramatic
+        if self.fx_meteor && self.meteors.len() < 3 && self.t >= self.next_meteor {
+            let x0 = self.rand() * cols as f64;
+            let y0 = -6.0 - self.rand() * 8.0;
+            let dx = (self.rand() * 2.0 - 1.0) * 55.0;
+            let dy = 70.0 + self.rand() * 70.0;
+            let dur = 1.2 + self.rand() * 0.8;
+            let len = 8.0 + self.rand() * 9.0;
+            self.meteors.push(Meteor { x0, y0, dx, dy, t: 0.0, dur, len });
+            self.next_meteor = self.t + 2.5 + self.rand() * 4.0;
+        }
+        let mut burnouts: Vec<(f64, f64)> = Vec::new();
+        for m in self.meteors.iter_mut() {
+            m.t += dt / m.dur;
+            if m.t >= 1.0 {
+                let x1 = m.x0 + m.dx * m.dur;
+                let y1 = m.y0 + m.dy * m.dur;
+                if y1 > 0.0 && y1 < rows as f64 - 1.0 && x1 >= 0.0 && x1 < cols as f64 {
+                    burnouts.push((x1, y1));
+                }
+            }
+        }
+        self.meteors.retain(|m| m.t < 1.0);
+        for (mx, my) in burnouts {
+            // a little burst where it burns out
+            for _ in 0..4 {
+                let dir = self.rand() * std::f64::consts::TAU;
+                let off = 1.0 + self.rand() * 3.0;
+                let dur = 0.4 + self.rand() * 0.4;
+                let glyph = if self.rand() < 0.5 { '*' } else { '.' };
+                self.sparks.push(Spark {
+                    x0: mx,
+                    y0: my,
+                    cx: mx + dir.cos() * off,
+                    cy: my + dir.sin() * off - 1.0,
+                    x1: mx + dir.cos() * (off + 2.0),
+                    y1: my + dir.sin() * (off + 2.0),
+                    t: 0.0,
+                    dur,
+                    glyph,
+                });
+            }
+        }
     }
 
     /// bezier point at eased t (ease-out quint, TTE OutQuint on the path)
@@ -740,6 +809,56 @@ impl Storm {
                     reverse: false,
                     width: 1,
                 });
+            }
+        }
+
+        // meteors: bright diagonal streaks, white-hot head with a tapering
+        // ember trail (white -> gold -> orange -> deep red) and a soft glow
+        // around the head
+        for m in &self.meteors {
+            let (vx, vy) = (m.dx * m.dur, m.dy * m.dur);
+            let vlen2 = vx * vx + vy * vy;
+            if vlen2 < 1.0 {
+                continue;
+            }
+            // nearest point on the path at-or-behind the head
+            let s = (((col as f64 - m.x0) * vx + (row as f64 - m.y0) * vy) / vlen2).clamp(0.0, m.t);
+            let px = m.x0 + vx * s;
+            let py = m.y0 + vy * s;
+            let perp = ((col as f64 - px).powi(2) + (row as f64 - py).powi(2)).sqrt();
+            if perp < 0.55 {
+                let behind = (m.t - s) * vlen2.sqrt(); // cells behind the head
+                if behind <= m.len {
+                    let k = (1.0 - behind / m.len).max(0.0); // 1 head -> 0 tail
+                    let (r, g, b) = if k > 0.7 {
+                        (0xFF, lerp(0xFF, 0xD0, (1.0 - k) / 0.3), lerp(0xFF, 0x80, (1.0 - k) / 0.3))
+                    } else if k > 0.35 {
+                        (
+                            0xFF,
+                            lerp(0xD0, 0x88, (0.7 - k) / 0.35),
+                            lerp(0x80, 0x30, (0.7 - k) / 0.35),
+                        )
+                    } else {
+                        (
+                            lerp(0xFF, 0x90, (0.35 - k) / 0.35),
+                            lerp(0x88, 0x38, (0.35 - k) / 0.35),
+                            lerp(0x30, 0x1C, (0.35 - k) / 0.35),
+                        )
+                    };
+                    let glow = if k > 0.85 {
+                        Color::Rgb(lerp(0x00, 0x66, k), lerp(0x00, 0x6E, k), lerp(0x00, 0x88, k))
+                    } else {
+                        base.bg
+                    };
+                    return Some(Cell {
+                        ch: if k > 0.85 { '*' } else { '·' },
+                        fg: Color::Rgb(r, g, b),
+                        bg: glow,
+                        bold: k > 0.7,
+                        reverse: false,
+                        width: 1,
+                    });
+                }
             }
         }
 
@@ -825,21 +944,30 @@ impl Storm {
             }
         }
 
-        // gust front: a dense band of wind-blown rain sweeping across —
-        // sparse leaning glyphs on empty cells, densest at the leading edge,
-        // so it reads as a wall of weather instead of a scan line
+        // gust front: a dense band of wind-blown rain sweeping across — the
+        // leading edge glows white-blue and fades back to normal rain behind
         if let Some((fx, dir, _spd)) = self.front {
             if base.ch == ' ' {
                 let d = (col as f64 - fx).abs();
-                if d < 6.0 {
+                if d < 8.0 {
                     let h = (row * 31 + col * 17) as i64 + (fx * 3.0) as i64;
-                    let edge = ((6.0 - d) / 6.0 * 3.0).round() as i64; // 0..3
-                    if edge > 0 && h.rem_euclid(4) < edge {
+                    let edge = (1.0 - d / 8.0).max(0.0); // 1 at the edge
+                    let wisp = ((row.wrapping_mul(2654435761) >> 24) % 100) as f64 / 100.0;
+                    let density = edge * (0.25 + 0.75 * wisp);
+                    if h.rem_euclid(4) < (density * 3.0).round() as i64 {
+                        // white-blue at the edge -> normal rain behind
+                        let fg = Color::Rgb(lerp(0xAA, 0xE8, edge), lerp(0xAA, 0xF4, edge), lerp(0xFF, 0xFF, edge));
+                        let gk = ((density - 0.35) * 1.5).max(0.0).min(1.0);
+                        let glow = Color::Rgb(
+                            lerp(0x00, 0x4E, gk * 0.4),
+                            lerp(0x00, 0x5C, gk * 0.4),
+                            lerp(0x00, 0x90, gk * 0.4),
+                        );
                         return Some(Cell {
                             ch: if dir < 0.0 { '/' } else { '\\' },
-                            fg: RAIN_COLOR,
-                            bg: base.bg,
-                            bold: h.rem_euclid(3) == 0,
+                            fg,
+                            bg: glow,
+                            bold: edge > 0.6,
                             reverse: false,
                             width: 1,
                         });
@@ -848,27 +976,53 @@ impl Storm {
             }
         }
 
-        // fog: a low wavy band that dims text and dusts empty cells
+        // fog: a drifting wavy band of haze — dims text under it, dusts mist
+        // particles, and blooms a pale glow into the background on empty
+        // cells (text keeps its own background, the sky doesn't)
         if self.fx_fog {
-            let r = row as f64;
-            let cy = self.rows as f64 * (0.55 + 0.15 * (self.fog_t * 0.1).sin());
-            let half = 3.5 + 1.5 * (self.fog_t * 0.23 + r * 0.5).sin();
-            if (r - cy).abs() < half {
-                if base.ch != ' ' {
-                    let fogged = match base.fg {
-                        Color::Rgb(rr, gg, bb) => {
-                            Color::Rgb(lerp(rr, 0x8A, 0.55), lerp(gg, 0x9B, 0.55), lerp(bb, 0xBF, 0.55))
-                        }
-                        _ => Color::Rgb(0x8A, 0x9B, 0xBF),
-                    };
-                    let mut lit = base;
-                    lit.fg = fogged;
-                    return Some(lit);
-                } else if ((row * 31 + col * 17) as i64 + (self.fog_t * 8.0) as i64).rem_euclid(11) == 0 {
+            let c = col as f64;
+            let cy = self.rows as f64
+                * (0.60 + 0.08 * (c * 0.02 + self.fog_t * 0.15).sin() + 0.05 * (c * 0.06 - self.fog_t * 0.2).sin());
+            let half = 4.0 + 1.5 * (self.fog_t * 0.3 + c * 0.04).sin();
+            let v = (row as f64 - cy) / half;
+            if v.abs() < 1.0 {
+                let wisp = ((col.wrapping_mul(2654435761) >> 24) % 100) as f64 / 100.0;
+                let shimmer = 0.7 + 0.3 * (self.fog_t * 0.5 + c * 0.2).sin();
+                let fade = (1.0 - v * v).max(0.0);
+                let density = fade * (0.1 + 0.9 * wisp) * shimmer;
+                if density >= 0.12 {
+                    let gk = (density * 1.3).min(1.0);
+                    let glow = Color::Rgb(lerp(0x2A, 0x9E, gk), lerp(0x30, 0xAE, gk), lerp(0x3A, 0xC8, gk));
+                    if base.ch != ' ' {
+                        // dim the text into the fog; keep its own background
+                        let fogged = match base.fg {
+                            Color::Rgb(rr, gg, bb) => Color::Rgb(
+                                lerp(rr, 0x9A, gk * 0.5),
+                                lerp(gg, 0xAA, gk * 0.5),
+                                lerp(bb, 0xCC, gk * 0.5),
+                            ),
+                            _ => Color::Rgb(0x9A, 0xAA, 0xCC),
+                        };
+                        let mut lit = base;
+                        lit.fg = fogged;
+                        return Some(lit);
+                    }
+                    if density >= 0.30 {
+                        let pch = if density > 0.6 { ':' } else { '·' };
+                        return Some(Cell {
+                            ch: pch,
+                            fg: Color::Rgb(lerp(0x5A, 0xCE, gk), lerp(0x64, 0xDC, gk), lerp(0x74, 0xEE, gk)),
+                            bg: glow,
+                            bold: density > 0.7,
+                            reverse: false,
+                            width: 1,
+                        });
+                    }
+                    // bg-only haze
                     return Some(Cell {
-                        ch: '·',
-                        fg: Color::Rgb(0x8A, 0x9B, 0xBF),
-                        bg: base.bg,
+                        ch: ' ',
+                        fg: Color::Default,
+                        bg: glow,
                         bold: false,
                         reverse: false,
                         width: 1,
@@ -897,27 +1051,27 @@ impl Storm {
                 let g = ((v + 1.0) / 2.0 + t * 0.04).fract();
                 let (cr, cg, cb) = if g < 0.5 {
                     let k = g * 2.0;
-                    (lerp(0x5F, 0x4C, k), lerp(0xE8, 0xD9, k), lerp(0x9C, 0xD9, k))
+                    (lerp(0x80, 0x6E, k), lerp(0xFF, 0xFF, k), lerp(0xB0, 0xFF, k))
                 } else {
                     let k = (g - 0.5) * 2.0;
-                    (lerp(0x4C, 0xA8, k), lerp(0xD9, 0x8C, k), lerp(0xD9, 0xFF, k))
+                    (lerp(0x6E, 0xC9, k), lerp(0xFF, 0xA8, k), lerp(0xFF, 0xFF, k))
                 };
                 // the curtain does NOT inherit the base bg — it paints a dim
                 // aurora hue into the background, so it blooms as a glow field
                 let glow_k = (intensity * 1.4).min(1.0);
                 let glow = Color::Rgb(
-                    lerp(0x00, cr, glow_k * 0.30),
-                    lerp(0x00, cg, glow_k * 0.30),
-                    lerp(0x00, cb, glow_k * 0.30),
+                    lerp(0x00, cr, glow_k * 0.45),
+                    lerp(0x00, cg, glow_k * 0.45),
+                    lerp(0x00, cb, glow_k * 0.45),
                 );
                 if intensity >= 0.40 {
                     let ch = if intensity > 0.72 { '~' } else { '·' };
                     return Some(Cell {
                         ch,
                         fg: Color::Rgb(
-                            lerp(0x20, cr, glow_k),
-                            lerp(0x28, cg, glow_k),
-                            lerp(0x30, cb, glow_k),
+                            lerp(0x34, cr, glow_k),
+                            lerp(0x3C, cg, glow_k),
+                            lerp(0x44, cb, glow_k),
                         ),
                         bg: glow,
                         bold: intensity > 0.85,
@@ -1098,7 +1252,43 @@ mod effect_tests {
     
     
     
+    
     #[test]
+    fn meteors_spawn_streak_and_burn_out() {
+        let mut s = Storm::new();
+        assert_eq!(s.toggle_effect(b'M'), Some("meteors"));
+        assert!(s.fx_meteor);
+        assert!(s.fx_list().contains("meteors"));
+        s.rows = 24;
+        let blank = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 1 };
+
+        // spawn path: a due meteor spawns
+        s.next_meteor = 0.0;
+        s.tick(0.016, 80, 24);
+        assert!(!s.meteors.is_empty(), "a due meteor must spawn");
+        s.meteors.clear();
+        s.drops.clear(); // no rain interfering with the streak check
+        s.next_meteor = 1e9;
+
+        // deterministic streak across the screen: overlay must paint it
+        s.meteors.push(Meteor { x0: 10.0, y0: -5.0, dx: 20.0, dy: 60.0, t: 0.45, dur: 1.0, len: 12.0 });
+        let mut hit = 0;
+        for r in 0..24 {
+            for c in 0..80 {
+                if let Some(cell) = s.overlay(blank, r, c) {
+                    assert!(cell.ch == '*' || cell.ch == '\u{b7}', "meteor glyphs are * head and middle-dot trail");
+                    hit += 1;
+                }
+            }
+        }
+        assert!(hit > 0, "meteor must paint a visible streak");
+
+        // advancing past the duration burns it out (no new spawns due)
+        s.tick(3.0, 80, 24);
+        assert!(s.meteors.is_empty(), "meteors must burn out");
+    }
+
+#[test]
     fn rain_toggle_stops_spawning_without_spinning() {
         let mut s = Storm::new();
         s.tick(0.1, 80, 24);
@@ -1201,6 +1391,7 @@ mod effect_tests {
         s.front = Some((40.0, 1.0, 70.0));
         s.rings.push((5, 5, 0.5));
         s.embers.push((5.0, 5.0, 1.0, 0.0, 0.5));
+        s.meteors.push(Meteor { x0: 0.0, y0: 0.0, dx: 40.0, dy: 60.0, t: 0.5, dur: 1.0, len: 10.0 });
         s.rows = 24;
         let cont = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 0 };
         for r in 0..24 {
