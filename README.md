@@ -47,11 +47,15 @@ Requires a real terminal (WSL/Linux/macOS; host-termios + `poll` code is
 Unix-only). Your shell (`$SHELL`) is spawned inside.
 
 - **Ctrl+Q Ctrl+Q** (twice within 1.2s) exits and restores the terminal.
-- **Ctrl+G** (or Ctrl+Shift+G — same byte, BEL) then a key adjusts the storm live, and the current values flash on the bottom line for 2.5s:
+- **Ctrl+G h** toggles the storm control panel: a live status line plus the
+  legend, pinned to the bottom of the screen. While the panel is visible the
+  dials are **armed — no Ctrl+G needed**:
   - `]` / `[` — rain density up / down
   - `=` / `-` — rain fall speed up / down
   - `.` / `,` — strike frequency up / down
   - `b` — force a lightning strike now
+  - `Ctrl+G h` again turns the panel (and the armed dials) off.
+  With the panel hidden, the same dials still work behind `Ctrl+G` (silently).
 - The terminal is restored on SIGTERM/SIGHUP/SIGINT too.
 
 ## Controls & notes

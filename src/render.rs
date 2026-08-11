@@ -78,19 +78,25 @@ impl Renderer {
         }
     }
 
-    fn composite(&self, grid: &Grid, storm: &Storm, hud: Option<&str>, r: usize, c: usize) -> Cell {
-        // the transient storm HUD owns the bottom row while visible
-        if let Some(text) = hud {
-            if r + 1 == grid.rows {
-                if let Some(ch) = text.chars().nth(c) {
-                    return Cell {
-                        ch,
-                        fg: Color::Rgb(0x68, 0xA3, 0xE8),
-                        bg: Color::Default,
-                        bold: true,
-                        reverse: false,
-                        width: 1,
-                    };
+    fn composite(&self, grid: &Grid, storm: &Storm, hud: Option<&[String]>, r: usize, c: usize) -> Cell {
+        // the transient storm HUD panel owns the bottom rows while visible;
+        // each line is horizontally centered on the grid
+        if let Some(lines) = hud {
+            let top = grid.rows.saturating_sub(lines.len());
+            if r >= top {
+                let line = &lines[r - top];
+                let pad = grid.cols.saturating_sub(line.chars().count()) / 2;
+                if c >= pad {
+                    if let Some(ch) = line.chars().nth(c - pad) {
+                        return Cell {
+                            ch,
+                            fg: Color::Rgb(0x68, 0xA3, 0xE8),
+                            bg: Color::Default,
+                            bold: true,
+                            reverse: false,
+                            width: 1,
+                        };
+                    }
                 }
                 return Cell::default();
             }
@@ -102,7 +108,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, grid: &Grid, storm: &Storm, hud: Option<&str>, out: &mut Vec<u8>) {
+    pub fn render(&mut self, grid: &Grid, storm: &Storm, hud: Option<&[String]>, out: &mut Vec<u8>) {
         if grid.rows != self.rows || grid.cols != self.cols {
             self.rows = grid.rows;
             self.cols = grid.cols;

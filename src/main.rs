@@ -75,6 +75,22 @@ fn host_size() -> (usize, usize) {
     }
 }
 
+/// Apply a dial key to the storm; returns the new HUD status text,
+/// or None if the key isn't a dial.
+fn dial(storm: &mut storm::Storm, b: u8) -> Option<String> {
+    match b {
+        b']' => storm.dial_density(1.0),
+        b'[' => storm.dial_density(-1.0),
+        b'=' => storm.dial_speed(1.0),
+        b'-' => storm.dial_speed(-1.0),
+        b'.' => storm.dial_strike(1.0),
+        b',' => storm.dial_strike(-1.0),
+        b'b' => storm.force_strike(),
+        _ => return None,
+    }
+    Some(storm.status())
+}
+
 fn main() {
     unsafe {
         libc::signal(libc::SIGTERM, cleanup_handler as *const () as usize);
@@ -132,8 +148,18 @@ fn main() {
     let mut quit = false;
     let mut q_times: Vec<Instant> = Vec::new();
     let mut dial_pending = false;
+    // Escape-sequence passthrough state, persists across reads so a CSI
+    // sequence split by the terminal (ESC ... then the rest) is never
+    // dial-matched mid-stream. 0 = none, 1 = saw ESC, 2 = inside CSI/SS3.
+    let mut esc_seq: u8 = 0;
     let mut hud_on = false;
-    let mut hud_text = String::new();
+    // The HUD panel: line 0 is the live status, the rest is a static legend.
+    // It owns the bottom `hud_lines.len()` rows while visible.
+    let mut hud_lines: Vec<String> = vec![
+        String::new(),
+        "] / [  rain density      = / -  rain speed      . / ,  strike freq".to_string(),
+        "b  force strike         Ctrl+G h  close panel".to_string(),
+    ];
 
     while !quit {
         // Resize: propagate host size to grid, renderer, and the child pty.
@@ -172,41 +198,30 @@ fn main() {
                     Ok(n) => {
                         let mut forwarded = Vec::with_capacity(n);
                         for &b in &buf[..n] {
+                            if esc_seq != 0 {
+                                forwarded.push(b);
+                                esc_seq = match (esc_seq, b) {
+                                    (1, b'[') | (1, b'O') => 2,   // CSI / SS3
+                                    (1, _) => 0,                  // Alt+key
+                                    (2, b) if (0x40..=0x7E).contains(&b) => 0, // final byte
+                                    _ => esc_seq,
+                                };
+                                continue;
+                            }
                             if dial_pending {
                                 // Ctrl+G then a key: live storm dials.
                                 dial_pending = false;
-                                match b {
-                                    b']' => {
-                                        storm.dial_density(1.0);
-                                        hud_text = storm.status();
+                                if b == b'h' {
+                                    // Ctrl+G h toggles the persistent HUD.
+                                    hud_on = !hud_on;
+                                    hud_lines[0] = storm.status();
+                                } else if let Some(status) = dial(&mut storm, b) {
+                                    hud_lines[0] = status;
+                                } else {
+                                    if b == 0x1B && hud_on {
+                                        esc_seq = 1; // Ctrl+G then arrow: don't eat the `[`
                                     }
-                                    b'[' => {
-                                        storm.dial_density(-1.0);
-                                        hud_text = storm.status();
-                                    }
-                                    b'=' => {
-                                        storm.dial_speed(1.0);
-                                        hud_text = storm.status();
-                                    }
-                                    b'-' => {
-                                        storm.dial_speed(-1.0);
-                                        hud_text = storm.status();
-                                    }
-                                    b'.' => {
-                                        storm.dial_strike(1.0);
-                                        hud_text = storm.status();
-                                    }
-                                    b',' => {
-                                        storm.dial_strike(-1.0);
-                                        hud_text = storm.status();
-                                    }
-                                    b'b' => storm.force_strike(),
-                                    // Ctrl+G h toggles the persistent HUD
-                                    b'h' => {
-                                        hud_on = !hud_on;
-                                        hud_text = storm.status();
-                                    }
-                                    _ => forwarded.push(b), // not a dial: pass through
+                                    forwarded.push(b); // not a dial: pass through
                                 }
                                 continue;
                             }
@@ -215,6 +230,18 @@ fn main() {
                                 // the bell — the child never needs it).
                                 dial_pending = true;
                                 continue;
+                            }
+                            if hud_on {
+                                // HUD visible = dials armed: no Ctrl+G needed.
+                                if b == 0x1B {
+                                    forwarded.push(b);
+                                    esc_seq = 1;
+                                    continue;
+                                }
+                                if let Some(status) = dial(&mut storm, b) {
+                                    hud_lines[0] = status;
+                                    continue;
+                                }
                             }
                             if b == 0x11 {
                                 // Ctrl+Q twice within 1.2s exits the storm.
@@ -240,7 +267,7 @@ fn main() {
         let dt = last_frame.elapsed().as_secs_f64().min(0.1);
         last_frame = Instant::now();
         storm.tick(dt, perform.grid.cols, perform.grid.rows);
-        let hud_view = if hud_on { Some(hud_text.as_str()) } else { None };
+        let hud_view = if hud_on { Some(hud_lines.as_slice()) } else { None };
         renderer.render(&perform.grid, &storm, hud_view, &mut out);
         if !out.is_empty() {
             std::io::stdout().write_all(&out).unwrap();
