@@ -7,7 +7,7 @@ fully interactive.
 
 ![Thunderhead demo](demo.gif)
 
-[▶ Watch the full 39s recording](thunderhead.mp4)
+[▶ Watch the full 39s recording](thunderhead-preview.mp4)
 
 ```
 child shell (pty) ──► pty master ──► vte::Parser ──► Perform ──► Grid (source of truth)
