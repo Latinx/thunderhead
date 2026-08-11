@@ -132,7 +132,8 @@ fn main() {
     let mut quit = false;
     let mut q_times: Vec<Instant> = Vec::new();
     let mut dial_pending = false;
-    let mut hud: Option<(String, Instant)> = None;
+    let mut hud_on = false;
+    let mut hud_text = String::new();
 
     while !quit {
         // Resize: propagate host size to grid, renderer, and the child pty.
@@ -177,30 +178,34 @@ fn main() {
                                 match b {
                                     b']' => {
                                         storm.dial_density(1.0);
-                                        hud = Some((storm.status(), Instant::now()));
+                                        hud_text = storm.status();
                                     }
                                     b'[' => {
                                         storm.dial_density(-1.0);
-                                        hud = Some((storm.status(), Instant::now()));
+                                        hud_text = storm.status();
                                     }
                                     b'=' => {
                                         storm.dial_speed(1.0);
-                                        hud = Some((storm.status(), Instant::now()));
+                                        hud_text = storm.status();
                                     }
                                     b'-' => {
                                         storm.dial_speed(-1.0);
-                                        hud = Some((storm.status(), Instant::now()));
+                                        hud_text = storm.status();
                                     }
                                     b'.' => {
                                         storm.dial_strike(1.0);
-                                        hud = Some((storm.status(), Instant::now()));
+                                        hud_text = storm.status();
                                     }
                                     b',' => {
                                         storm.dial_strike(-1.0);
-                                        hud = Some((storm.status(), Instant::now()));
+                                        hud_text = storm.status();
                                     }
                                     b'b' => storm.force_strike(),
-                                    b'h' => hud = Some((storm.status(), Instant::now())),
+                                    // Ctrl+G h toggles the persistent HUD
+                                    b'h' => {
+                                        hud_on = !hud_on;
+                                        hud_text = storm.status();
+                                    }
                                     _ => forwarded.push(b), // not a dial: pass through
                                 }
                                 continue;
@@ -235,12 +240,8 @@ fn main() {
         let dt = last_frame.elapsed().as_secs_f64().min(0.1);
         last_frame = Instant::now();
         storm.tick(dt, perform.grid.cols, perform.grid.rows);
-        if let Some((_, shown_at)) = &hud {
-            if shown_at.elapsed() > std::time::Duration::from_millis(2500) {
-                hud = None;
-            }
-        }
-        renderer.render(&perform.grid, &storm, hud.as_ref().map(|(s, _)| s.as_str()), &mut out);
+        let hud_view = if hud_on { Some(hud_text.as_str()) } else { None };
+        renderer.render(&perform.grid, &storm, hud_view, &mut out);
         if !out.is_empty() {
             std::io::stdout().write_all(&out).unwrap();
             std::io::stdout().flush().unwrap();
