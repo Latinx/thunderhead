@@ -47,7 +47,7 @@ Requires a real terminal (WSL/Linux/macOS; host-termios + `poll` code is
 Unix-only). Your shell (`$SHELL`) is spawned inside.
 
 - **Ctrl+Q Ctrl+Q** (twice within 1.2s) exits and restores the terminal.
-- **Ctrl+G** then a key adjusts the storm live:
+- **Ctrl+G** (or Ctrl+Shift+G — same byte, BEL) then a key adjusts the storm live, and the current values flash on the bottom line for 2.5s:
   - `]` / `[` — rain density up / down
   - `=` / `-` — rain fall speed up / down
   - `.` / `,` — strike frequency up / down
