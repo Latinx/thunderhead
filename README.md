@@ -47,15 +47,21 @@ Requires a real terminal (WSL/Linux/macOS; host-termios + `poll` code is
 Unix-only). Your shell (`$SHELL`) is spawned inside.
 
 - **Ctrl+Q Ctrl+Q** (twice within 1.2s) exits and restores the terminal.
-- **Ctrl+G h** toggles the storm control panel: a live status line plus the
-  legend, pinned to the bottom of the screen. While the panel is visible the
-  dials are **armed — no Ctrl+G needed**:
+- **Ctrl+G h** toggles the storm control panel: live status, the enabled-effect
+  list, and the legend, pinned to the bottom of the screen. While the panel is
+  visible the controls are **armed — no Ctrl+G needed**:
   - `]` / `[` — rain density up / down
   - `=` / `-` — rain fall speed up / down
   - `.` / `,` — strike frequency up / down
   - `b` — force a lightning strike now
-  - `Ctrl+G h` again turns the panel (and the armed dials) off.
-  With the panel hidden, the same dials still work behind `Ctrl+G` (silently).
+  - `t c k F e s g f h a m` — toggle effects: `trails` (drop wakes),
+    `corona` (whole-screen tint on strike), `shake` (screen jolts),
+    `forks` (branched bolts + halo), `embers` (crawl along the struck row),
+    `splash` (impact ripples), `fronts` (sweeping gust lines), `fog`
+    (drifting dim band), `hail` (big bright drops), `aurora` (roiling
+    bands), `matrix` (green katakana rain)
+  - `Ctrl+G h` again turns the panel (and the armed controls) off.
+  With the panel hidden, the dials still work behind `Ctrl+G` (silently).
 - The terminal is restored on SIGTERM/SIGHUP/SIGINT too.
 
 ## Controls & notes

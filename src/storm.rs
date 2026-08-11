@@ -78,6 +78,12 @@ fn lerp(a: u8, b: u8, t: f64) -> u8 {
 
 // ─── Storm entities ─────────────────────────────────────────────────────────
 
+/// halfwidth katakana — the authentic matrix rain, width-1 in this table
+const MATRIX_CHARS: [char; 30] = [
+    'ｱ', 'ｲ', 'ｳ', 'ｴ', 'ｵ', 'ｶ', 'ｷ', 'ｸ', 'ｹ', 'ｺ', 'ｻ', 'ｼ', 'ｽ', 'ｾ', 'ｿ', 'ﾀ', 'ﾁ', 'ﾂ', 'ﾃ', 'ﾄ',
+    'ﾅ', 'ﾆ', 'ﾇ', 'ﾈ', 'ﾉ', 'ﾊ', 'ﾋ', 'ﾌ', 'ﾍ', 'ﾎ',
+];
+
 #[derive(Debug)]
 struct Drop {
     col: f64,
@@ -88,6 +94,8 @@ struct Drop {
     vertical: char,
     /// wind-responsive drops lean `/`/`\`; vertical drops always fall straight
     leanable: bool,
+    /// hail: big bright drops that fall fast and chip on impact
+    hail: bool,
 }
 
 #[derive(Debug)]
@@ -129,6 +137,27 @@ pub struct Storm {
     rain_density: f64,          // fraction of columns with falling rain
     rain_speed: (f64, f64),     // (min, max) cells/s
     strike_interval: (f64, f64), // (min, max) seconds between strikes
+    // effect toggles — flipped from the HUD panel (Ctrl+G h, then a key)
+    fx_trails: bool,
+    fx_corona: bool,
+    fx_shake: bool,
+    fx_fog: bool,
+    fx_embers: bool,
+    fx_forks: bool,
+    fx_splash: bool,
+    fx_fronts: bool,
+    fx_hail: bool,
+    fx_aurora: bool,
+    fx_matrix: bool,
+    // effect state
+    shake: f64,                  // 0..1 post-strike screen shake
+    fog_t: f64,                  // fog drift clock
+    aurora_t: f64,               // aurora roil clock
+    front: Option<(f64, f64, f64)>, // gust front: (x, dir, speed)
+    next_front: f64,
+    rings: Vec<(usize, usize, f64)>, // splash rings: (row, col, t 0..1)
+    embers: Vec<(f64, f64, f64, f64, f64)>, // (row, col, dir, life, dur)
+    rows: usize,                 // last tick's canvas height (fog band needs it)
 }
 
 impl Storm {
@@ -150,6 +179,26 @@ impl Storm {
             rain_density: 0.45,
             rain_speed: (30.0, 90.0),
             strike_interval: (4.5, 8.0),
+            // default on: the storm-feel set; fog/hail/aurora/matrix opt-in
+            fx_trails: true,
+            fx_corona: true,
+            fx_shake: true,
+            fx_fog: false,
+            fx_embers: true,
+            fx_forks: true,
+            fx_splash: true,
+            fx_fronts: true,
+            fx_hail: false,
+            fx_aurora: false,
+            fx_matrix: false,
+            shake: 0.0,
+            fog_t: 0.0,
+            aurora_t: 0.0,
+            front: None,
+            next_front: 8.0,
+            rings: Vec::new(),
+            embers: Vec::new(),
+            rows: 0,
         }
     }
 
@@ -187,6 +236,134 @@ impl Storm {
     /// `b` — force a strike on the next tick.
     pub fn force_strike(&mut self) {
         self.next_strike = self.t;
+    }
+
+    /// `t c k F e s g f h a m` — flip an effect; returns its name if known.
+    pub fn toggle_effect(&mut self, key: u8) -> Option<&'static str> {
+        match key {
+            b't' => {
+                self.fx_trails = !self.fx_trails;
+                Some("trails")
+            }
+            b'c' => {
+                self.fx_corona = !self.fx_corona;
+                Some("corona")
+            }
+            b'k' => {
+                self.fx_shake = !self.fx_shake;
+                Some("shake")
+            }
+            b'F' => {
+                self.fx_forks = !self.fx_forks;
+                Some("forks")
+            }
+            b'e' => {
+                self.fx_embers = !self.fx_embers;
+                Some("embers")
+            }
+            b's' => {
+                self.fx_splash = !self.fx_splash;
+                Some("splash")
+            }
+            b'g' => {
+                self.fx_fronts = !self.fx_fronts;
+                Some("fronts")
+            }
+            b'f' => {
+                self.fx_fog = !self.fx_fog;
+                Some("fog")
+            }
+            b'h' => {
+                self.fx_hail = !self.fx_hail;
+                Some("hail")
+            }
+            b'a' => {
+                self.fx_aurora = !self.fx_aurora;
+                Some("aurora")
+            }
+            b'm' => {
+                self.fx_matrix = !self.fx_matrix;
+                self.drops.clear(); // respawn as katakana (or back to rain)
+                Some("matrix")
+            }
+            _ => None,
+        }
+    }
+
+    /// Names of the enabled effects, for the HUD fx line.
+    pub fn fx_list(&self) -> String {
+        let mut on: Vec<&str> = Vec::new();
+        if self.fx_trails {
+            on.push("trails");
+        }
+        if self.fx_corona {
+            on.push("corona");
+        }
+        if self.fx_shake {
+            on.push("shake");
+        }
+        if self.fx_forks {
+            on.push("forks");
+        }
+        if self.fx_embers {
+            on.push("embers");
+        }
+        if self.fx_splash {
+            on.push("splash");
+        }
+        if self.fx_fronts {
+            on.push("fronts");
+        }
+        if self.fx_fog {
+            on.push("fog");
+        }
+        if self.fx_hail {
+            on.push("hail");
+        }
+        if self.fx_aurora {
+            on.push("aurora");
+        }
+        if self.fx_matrix {
+            on.push("matrix");
+        }
+        if on.is_empty() {
+            "fx: none".to_string()
+        } else {
+            format!("fx: {}", on.join(" "))
+        }
+    }
+
+    /// Whole-screen cool tint while the flash is fresh (corona effect).
+    pub fn corona_level(&self) -> f64 {
+        if !self.fx_corona {
+            return 0.0;
+        }
+        let Some(b) = &self.bolt else { return 0.0 };
+        b.path
+            .iter()
+            .map(|&(_, _, _, ttl)| {
+                kitt_intensity(1.0 - (ttl / BOLT_TTL).clamp(0.0, 1.0)).max(0.0).min(1.0)
+            })
+            .fold(0.0, f64::max)
+            * 0.45
+    }
+
+    pub fn shake_level(&self) -> f64 {
+        if self.fx_shake {
+            self.shake
+        } else {
+            0.0
+        }
+    }
+
+    /// Deterministic per-frame jitter while the screen is shaking.
+    pub fn shake_offset(&self) -> (i64, i64) {
+        if !self.fx_shake || self.shake <= 0.0 {
+            return (0, 0);
+        }
+        let dr = ((self.t * 83.0).sin() * 1.3) as i64;
+        let dc = ((self.t * 127.0).sin() * 1.3) as i64;
+        (dr, dc)
     }
 
     /// Current dial values, for the on-screen HUD.
@@ -229,11 +406,18 @@ impl Storm {
     fn spawn_drop(&mut self, cols: usize, rows: usize) {
         let col = self.rand() * cols as f64;
         let row = -(rows as f64) * self.rand() * 0.4; // start above the screen
-        let speed = self.rain_speed.0 + self.rand() * (self.rain_speed.1 - self.rain_speed.0);
-        let vertical = if self.rand() < 0.5 { '.' } else { ',' };
-        // half the drops always fall straight; half lean with the wind
-        let leanable = self.rand() < 0.5;
-        self.drops.push(Drop { col, row, speed, glyph: vertical, vertical, leanable });
+        let base_speed = self.rain_speed.0 + self.rand() * (self.rain_speed.1 - self.rain_speed.0);
+        if self.fx_matrix {
+            let ch = MATRIX_CHARS[(self.rand() * MATRIX_CHARS.len() as f64) as usize];
+            self.drops.push(Drop { col, row, speed: base_speed * 1.6, glyph: ch, vertical: ch, leanable: false, hail: false });
+            return;
+        }
+        // hail: big bright drops, faster; frequency rises with the density dial
+        let hail = self.fx_hail && self.rand() < 0.06 + (self.rain_density - 0.35).max(0.0) * 0.5;
+        let speed = if hail { base_speed * 2.5 } else { base_speed };
+        let vertical = if hail { '●' } else if self.rand() < 0.5 { '.' } else { ',' };
+        let leanable = !hail && self.rand() < 0.5;
+        self.drops.push(Drop { col, row, speed, glyph: vertical, vertical, leanable, hail });
     }
 
     /// Strike: the whole jagged bolt appears at once (a real flash is ~1/10s),
@@ -254,10 +438,11 @@ impl Storm {
                 '/'
             };
             path.push((r as i64, x, glyph, BOLT_TTL));
-            // short horizontal tendrils fork off along the way
+            // short horizontal tendrils fork off along the way; the forks
+            // effect extends them into proper sub-branches
             if self.rand() < 0.20 {
                 let dir: i64 = if self.rand() < 0.5 { 1 } else { -1 };
-                let len = 2 + (self.rand() * 4.0) as i64;
+                let len = if self.fx_forks { 3 + (self.rand() * 5.0) as i64 } else { 2 + (self.rand() * 3.0) as i64 };
                 for i in 1..=len {
                     let bx = x + dir * i;
                     if bx < 0 || bx >= cols as i64 {
@@ -271,6 +456,18 @@ impl Storm {
         self.bolt = Some(Bolt { path });
         // impact at the bottom of the bolt
         self.impact(x as f64, rows);
+        if self.fx_shake {
+            self.shake = 1.0; // the whole screen shivers with the boom
+        }
+        if self.fx_embers {
+            // a couple of embers crawl along the struck row as it cools
+            for _ in 0..2 {
+                let dir = if self.rand() < 0.5 { 1.0 } else { -1.0 };
+                let col = x as f64 + self.rand() * 6.0 - 3.0;
+                let dur = 0.5 + self.rand() * 0.6;
+                self.embers.push((rows.saturating_sub(1) as f64, col, dir, 0.0, dur));
+            }
+        }
         let (lo, hi) = self.strike_interval;
         self.next_strike = self.t + lo + self.rand() * (hi - lo);
     }
@@ -321,6 +518,7 @@ impl Storm {
     /// Advance the storm by dt seconds over a cols x rows canvas.
     pub fn tick(&mut self, dt: f64, cols: usize, rows: usize) {
         self.t += dt;
+        self.rows = rows;
         self.ensure_glow(rows, cols);
 
         // decay the text glow
@@ -348,6 +546,35 @@ impl Storm {
             }
         }
         self.drops.retain(|d| d.row < rows as f64 + 1.0);
+        // hail chips and splash rings where drops cross the bottom edge
+        let mut chips: Vec<f64> = Vec::new();
+        let mut ripples: Vec<usize> = Vec::new();
+        for d in self.drops.iter() {
+            if d.row >= rows as f64 - 0.5 && d.row < rows as f64 + 1.0 {
+                if d.hail && self.fx_hail {
+                    chips.push(d.col);
+                } else if self.fx_splash && self.rings.len() < 16 {
+                    ripples.push(d.col as usize);
+                }
+            }
+        }
+        for col in chips {
+            let x1 = col + (self.rand() * 4.0 - 2.0);
+            self.sparks.push(Spark {
+                x0: col,
+                y0: rows.saturating_sub(1) as f64,
+                cx: col,
+                cy: rows as f64 * 0.5,
+                x1,
+                y1: rows.saturating_sub(1) as f64,
+                t: 0.0,
+                dur: 0.3,
+                glyph: '*',
+            });
+        }
+        for rc in ripples {
+            self.rings.push((rows.saturating_sub(1), rc, 0.0));
+        }
 
         // lightning: an instant full-line flash, then the line fades
         if self.bolt.is_none() && self.t >= self.next_strike {
@@ -368,6 +595,49 @@ impl Storm {
             s.t += dt / s.dur;
         }
         self.sparks.retain(|s| s.t < 1.0);
+
+        // screen shake decays fast (~0.15s)
+        self.shake = (self.shake - dt * 7.0).max(0.0);
+
+        // drift clocks for the slow effects
+        if self.fx_fog {
+            self.fog_t += dt;
+        }
+        if self.fx_aurora {
+            self.aurora_t += dt * 0.6;
+        }
+
+        // gust fronts sweep across periodically, dragging a real gust
+        if self.fx_fronts && self.front.is_none() && self.t >= self.next_front {
+            let dir = if self.rand() < 0.5 { -1.0 } else { 1.0 };
+            let start = if dir < 0.0 { cols as f64 + 5.0 } else { -5.0 };
+            self.front = Some((start, dir, 60.0 + self.rand() * 50.0));
+            self.wind_target = dir * 0.9;
+            self.next_front = self.t + 6.0 + self.rand() * 8.0;
+        }
+        let mut front_done = false;
+        if let Some((x, dir, spd)) = &mut self.front {
+            *x += *dir * *spd * dt;
+            if *x < -8.0 || *x > cols as f64 + 8.0 {
+                front_done = true;
+            }
+        }
+        if front_done {
+            self.front = None;
+        }
+
+        // splash rings expand and fade
+        for r in self.rings.iter_mut() {
+            r.2 += dt / 0.35;
+        }
+        self.rings.retain(|r| r.2 < 1.0);
+
+        // embers crawl along the struck row and cool
+        for e in self.embers.iter_mut() {
+            e.1 += e.2 * 35.0 * dt;
+            e.3 += dt;
+        }
+        self.embers.retain(|e| e.3 < e.4);
     }
 
     /// bezier point at eased t (ease-out quint, TTE OutQuint on the path)
@@ -409,6 +679,24 @@ impl Storm {
                         width: 1,
                     });
                 }
+                // forks effect: a soft halo around the bolt while fresh
+                if self.fx_forks
+                    && base.ch == ' '
+                    && (tr - row as i64).abs() <= 1
+                    && (tc - col as i64).abs() <= 1
+                {
+                    let age = (1.0 - ttl / BOLT_TTL).max(0.0).min(1.0);
+                    if kitt_intensity(age) > 0.5 {
+                        return Some(Cell {
+                            ch: '·',
+                            fg: Color::Rgb(0x9F, 0xB8, 0xFF),
+                            bg: base.bg,
+                            bold: false,
+                            reverse: false,
+                            width: 1,
+                        });
+                    }
+                }
             }
         }
 
@@ -443,14 +731,132 @@ impl Storm {
             return Some(lit);
         }
 
-        // rain: fast single-glyph drops in light blue; the drop keeps the
-        // base cell's background so it doesn't punch holes through app-painted
-        // backgrounds (e.g. nvim) — only the glyph and color change
+        // embers: ember crawl along the struck row, warm and fading
+        for &(er, ec, _dir, life, dur) in &self.embers {
+            if row == er as usize && col == ec.floor() as usize {
+                let cool = (life / dur).min(1.0);
+                return Some(Cell {
+                    ch: '°',
+                    fg: Color::Rgb(lerp(0xFF, 0x50, cool), lerp(0xC0, 0x30, cool), lerp(0x40, 0x18, cool)),
+                    bg: base.bg,
+                    bold: cool < 0.4,
+                    reverse: false,
+                    width: 1,
+                });
+            }
+        }
+
+        // rain: drops keep the base background; hail is big and bright, matrix
+        // drops are katakana; the trails effect stretches a wake above the head
         for d in &self.drops {
-            if d.col as usize == col && d.row as usize == row {
+            let dr = d.row as usize;
+            let dc = d.col as usize;
+            if dc == col && dr == row {
+                let (fg, bold) = if d.hail {
+                    (Color::Rgb(0xE8, 0xF0, 0xFF), true)
+                } else if self.fx_matrix {
+                    (Color::Rgb(0x00, 0xFF, 0x70), true)
+                } else {
+                    (RAIN_COLOR, false)
+                };
                 return Some(Cell {
                     ch: d.glyph,
-                    fg: RAIN_COLOR,
+                    fg,
+                    bg: base.bg,
+                    bold,
+                    reverse: false,
+                    width: 1,
+                });
+            }
+            if self.fx_trails && dc == col && dr >= 1 && row == dr - 1 {
+                let (tg, tf) = if self.fx_matrix {
+                    (d.glyph, Color::Rgb(0x00, 0x90, 0x40))
+                } else {
+                    (':', Color::Rgb(0x88, 0x88, 0xCC))
+                };
+                return Some(Cell {
+                    ch: tg,
+                    fg: tf,
+                    bg: base.bg,
+                    bold: false,
+                    reverse: false,
+                    width: 1,
+                });
+            }
+        }
+
+        // splash rings: expanding `o` ripples where drops landed
+        for &(rr, rc, t) in &self.rings {
+            if row == rr && base.ch == ' ' {
+                let d = (col as i64 - rc as i64).unsigned_abs() as f64;
+                if (d - t * 2.0).abs() < 0.6 {
+                    return Some(Cell {
+                        ch: 'o',
+                        fg: Color::Rgb(0x99, 0xAA, 0xFF),
+                        bg: base.bg,
+                        bold: false,
+                        reverse: false,
+                        width: 1,
+                    });
+                }
+            }
+        }
+
+        // gust front: a jagged line sweeping across with the gust
+        if let Some((fx, dir, _spd)) = self.front {
+            if base.ch == ' ' {
+                let jitter = ((row * 7) % 5) as f64 - 2.0;
+                if (col as f64 - (fx + jitter)).abs() < 0.6 {
+                    return Some(Cell {
+                        ch: if dir < 0.0 { '╱' } else { '╲' },
+                        fg: Color::Rgb(0x99, 0xAA, 0xEE),
+                        bg: base.bg,
+                        bold: false,
+                        reverse: false,
+                        width: 1,
+                    });
+                }
+            }
+        }
+
+        // fog: a low wavy band that dims text and dusts empty cells
+        if self.fx_fog {
+            let r = row as f64;
+            let cy = self.rows as f64 * (0.55 + 0.15 * (self.fog_t * 0.1).sin());
+            let half = 3.5 + 1.5 * (self.fog_t * 0.23 + r * 0.5).sin();
+            if (r - cy).abs() < half {
+                if base.ch != ' ' {
+                    let fogged = match base.fg {
+                        Color::Rgb(rr, gg, bb) => {
+                            Color::Rgb(lerp(rr, 0x8A, 0.55), lerp(gg, 0x9B, 0.55), lerp(bb, 0xBF, 0.55))
+                        }
+                        _ => Color::Rgb(0x8A, 0x9B, 0xBF),
+                    };
+                    let mut lit = base;
+                    lit.fg = fogged;
+                    return Some(lit);
+                } else if ((row * 31 + col * 17) as i64 + (self.fog_t * 8.0) as i64).rem_euclid(11) == 0 {
+                    return Some(Cell {
+                        ch: '·',
+                        fg: Color::Rgb(0x8A, 0x9B, 0xBF),
+                        bg: base.bg,
+                        bold: false,
+                        reverse: false,
+                        width: 1,
+                    });
+                }
+            }
+        }
+
+        // aurora: slow roiling bands across the top of the screen
+        if self.fx_aurora && row < self.rows / 4 && base.ch == ' ' {
+            let shift = (self.aurora_t * 14.0) as i64;
+            if (col as i64 + shift + (row as i64) * 3).rem_euclid(5) == 0 {
+                let palette = [(0x5F, 0xE8, 0x9C), (0x6E, 0x9C, 0xFF), (0xA8, 0x8C, 0xFF), (0x4C, 0xD9, 0xD9)];
+                let (ar, ag, ab) = palette[(row + (self.aurora_t * 3.0) as usize + col / 40) % 4];
+                return Some(Cell {
+                    ch: '~',
+                    fg: Color::Rgb(ar, ag, ab),
                     bg: base.bg,
                     bold: false,
                     reverse: false,
@@ -513,7 +919,7 @@ mod wide_overlay_tests {
     fn overlay_skips_wide_continuation_cells() {
         let mut s = Storm::new();
         // a drop sitting exactly on the continuation column of a wide char
-        s.drops.push(Drop { col: 5.0, row: 0.0, speed: 1.0, glyph: '|', vertical: '.', leanable: false });
+        s.drops.push(Drop { col: 5.0, row: 0.0, speed: 1.0, glyph: '|', vertical: '.', leanable: false, hail: false });
         let cont = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 0 };
         assert_eq!(s.overlay(cont, 0, 5), None, "storm must not draw on a continuation");
         let normal = Cell { ch: 'a', ..Cell::default() };
@@ -553,5 +959,82 @@ mod dial_tests {
         s.next_strike = 500.0;
         s.force_strike();
         assert_eq!(s.next_strike, s.t);
+    }
+}
+
+#[cfg(test)]
+mod effect_tests {
+    use super::*;
+
+    #[test]
+    fn toggles_flip_flags_and_report_names() {
+        let mut s = Storm::new();
+        assert_eq!(s.toggle_effect(b't'), Some("trails"));
+        assert!(!s.fx_trails);
+        assert_eq!(s.toggle_effect(b'm'), Some("matrix"));
+        assert!(s.fx_matrix);
+        assert_eq!(s.toggle_effect(b'z'), None);
+        assert!(s.fx_list().contains("matrix"));
+        assert!(s.fx_list().contains("trails") == false); // trails was flipped off
+    }
+
+    #[test]
+    fn matrix_respawns_as_katakana() {
+        let mut s = Storm::new();
+        s.toggle_effect(b'm');
+        s.spawn_drop(80, 24);
+        assert!(s.drops.iter().all(|d| MATRIX_CHARS.contains(&d.glyph) && !d.leanable));
+        // back to rain: glyphs are the vertical set again
+        s.toggle_effect(b'm');
+        s.drops.clear();
+        s.spawn_drop(80, 24);
+        assert!(s.drops.iter().all(|d| d.glyph == '.' || d.glyph == ','));
+    }
+
+    #[test]
+    fn hail_spawns_with_the_flag_on() {
+        let mut s = Storm::new();
+        s.fx_hail = true;
+        s.rain_density = 0.9;
+        for _ in 0..200 {
+            s.spawn_drop(80, 24);
+        }
+        assert!(s.drops.iter().any(|d| d.hail), "fixed-seed rng: hail must appear");
+    }
+
+    #[test]
+    fn corona_tracks_the_flash_and_fades() {
+        let mut s = Storm::new();
+        assert_eq!(s.corona_level(), 0.0);
+        s.strike(80, 24);
+        assert!(s.corona_level() > 0.0);
+        s.bolt = Some(Bolt { path: vec![(0, 0, '|', 0.0)] }); // fully faded
+        assert_eq!(s.corona_level(), 0.0);
+    }
+
+    #[test]
+    fn shake_offsets_are_small() {
+        let mut s = Storm::new();
+        assert_eq!(s.shake_offset(), (0, 0));
+        s.shake = 1.0;
+        let (dr, dc) = s.shake_offset();
+        assert!(dr.abs() <= 1 && dc.abs() <= 1);
+    }
+
+    #[test]
+    fn effects_never_paint_continuation_cells() {
+        let mut s = Storm::new();
+        s.fx_fog = true;
+        s.fx_aurora = true;
+        s.front = Some((40.0, 1.0, 70.0));
+        s.rings.push((5, 5, 0.5));
+        s.embers.push((5.0, 5.0, 1.0, 0.0, 0.5));
+        s.rows = 24;
+        let cont = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 0 };
+        for r in 0..24 {
+            for c in 0..80 {
+                assert!(s.overlay(cont, r, c).is_none(), "continuation cell painted at {r},{c}");
+            }
+        }
     }
 }

@@ -19,6 +19,10 @@ impl Style {
     }
 }
 
+fn lerp(a: u8, b: u8, t: f64) -> u8 {
+    (a as f64 + (b as f64 - a as f64) * t).clamp(0.0, 255.0) as u8
+}
+
 fn color_code(out: &mut Vec<u8>, fg: bool, c: Color) {
     // NOTE: prefix must be a string ("3"/"4"), NOT the byte value — formatting
     // b'3' as {} prints 51, producing the invalid SGR 518;2;... that the
@@ -64,6 +68,9 @@ pub struct Renderer {
     style: Style,
     /// when set, the next render treats every cell as changed (full repaint)
     dirty_all: bool,
+    /// the previous frame was shaking — keeps dirty_all armed one extra frame
+    /// so the screen repaints clean once the shake ends
+    was_shaking: bool,
 }
 
 impl Renderer {
@@ -75,10 +82,11 @@ impl Renderer {
             row_buf: vec![Cell::default(); cols],
             style: Style::default(),
             dirty_all: true,
+            was_shaking: false,
         }
     }
 
-    fn composite(&self, grid: &Grid, storm: &Storm, hud: Option<&[String]>, r: usize, c: usize) -> Cell {
+    fn composite(&self, grid: &Grid, storm: &Storm, hud: Option<&[String]>, corona: f64, r: usize, c: usize) -> Cell {
         // the transient storm HUD panel owns the bottom rows while visible;
         // each line is horizontally centered on the grid
         if let Some(lines) = hud {
@@ -104,7 +112,22 @@ impl Renderer {
         let base = grid.cell(r, c);
         match storm.overlay(base, r, c) {
             Some(o) => o,
-            None => base,
+            None => {
+                if corona > 0.0 {
+                    // corona: the whole screen tints cool blue while the
+                    // flash is fresh — the lightning becomes a moment
+                    let mut lit = base;
+                    if let Color::Rgb(red, green, blue) = base.fg {
+                        lit.fg = Color::Rgb(
+                            lerp(red, 0x9F, corona),
+                            lerp(green, 0xB8, corona),
+                            lerp(blue, 0xFF, corona),
+                        );
+                    }
+                    return lit;
+                }
+                base
+            }
         }
     }
 
@@ -117,6 +140,16 @@ impl Renderer {
             self.dirty_all = true;
             out.extend_from_slice(b"\x1b[2J\x1b[H");
         }
+        // corona tint level (0 when off) and screen shake — shake arms a full
+        // repaint, so it must run BEFORE `full` is snapshotted below
+        let corona = storm.corona_level();
+        let shaking = storm.shake_level() > 0.001;
+        if shaking || self.was_shaking {
+            self.dirty_all = true;
+        }
+        self.was_shaking = shaking;
+        let (dr, dc) = storm.shake_offset();
+
         let full = self.dirty_all;
         self.dirty_all = false;
 
@@ -132,7 +165,7 @@ impl Renderer {
         for r in 0..grid.rows {
             // fill row_buf with the composite for this row
             for c in 0..grid.cols {
-                let mut cell = self.composite(grid, storm, hud, r, c);
+                let mut cell = self.composite(grid, storm, hud, corona, r, c);
                 if let Some((cr, cc, ccell)) = cursor_cell {
                     if cr == r && cc == c {
                         cell = ccell;
@@ -160,7 +193,11 @@ impl Renderer {
                 {
                     c += 1;
                 }
-                let pos = format!("\x1b[{};{}H", r + 1, start + 1);
+                let pos = format!(
+                    "\x1b[{};{}H",
+                    (r as i64 + 1 + dr).max(1),
+                    (start as i64 + 1 + dc).max(1)
+                );
                 out.extend_from_slice(pos.as_bytes());
                 for cc in start..c {
                     let cell = self.row_buf[cc];

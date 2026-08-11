@@ -38,11 +38,15 @@ host stdin (raw) ──► forwarded verbatim to pty ─────────
   `/`/`\` with gusts), a lightning FLASH — the full jagged polyline appears
   at once, white-hot for ~0.18s, fading through wake tiers — with the text
   heating by proximity (red/orange/yellow) and bezier rock sparks on impact.
-  `tick()` advances drops/bolt/sparks/glow; `overlay(base, row, col) ->
-  Option<Cell>` composites. Structurally read-only w.r.t. the grid. Storm
-  cells inherit `base.bg` so they don't punch through painted backgrounds.
-  Colors render via `38;2;` RGB — do not regress the SGR prefix bug
-  (`b'3'` formats as 51 → invalid `518;2;` the terminal silently ignores).
+  Eleven toggleable effects (panel keys `t c k F e s g f h a m`): drop
+  trails, corona tint, screen shake, forked bolts + halo, ember crawl,
+  splash rings, gust fronts, fog bands, hail, aurora, matrix (halfwidth
+  katakana rain). All overlay-only; `tick()` advances drops/bolt/sparks/
+  glow/front/rings/embers/clocks; `overlay(base, row, col) -> Option<Cell>`
+  composites. Structurally read-only w.r.t. the grid. Storm cells inherit
+  `base.bg` so they don't punch through painted backgrounds. Colors render
+  via `38;2;` RGB — do not regress the SGR prefix bug (`b'3'` formats as
+  51 → invalid `518;2;` the terminal silently ignores).
 - `src/render.rs` — diff renderer: composite = grid + storm per cell (storm
   wins by full cell replacement), reverse-video cursor overlay, emits only
   changed runs (`\x1b[r;cH` + SGR) into a per-frame buffer.

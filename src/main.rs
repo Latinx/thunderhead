@@ -153,13 +153,16 @@ fn main() {
     // dial-matched mid-stream. 0 = none, 1 = saw ESC, 2 = inside CSI/SS3.
     let mut esc_seq: u8 = 0;
     let mut hud_on = false;
-    // The HUD panel: line 0 is the live status, the rest is a static legend.
-    // It owns the bottom `hud_lines.len()` rows while visible.
+    // The HUD panel: line 0 is the live status, line 1 the enabled-effect
+    // list, the rest a legend. It owns the bottom lines while visible.
     let mut hud_lines: Vec<String> = vec![
         String::new(),
-        "] / [  rain density      = / -  rain speed      . / ,  strike freq".to_string(),
-        "b  force strike         Ctrl+G h  close panel".to_string(),
+        String::new(), // fx line, filled once the storm exists
+        "t trails  c corona  k shake  F forks  e embers  s splash".to_string(),
+        "g fronts  f fog  h hail  a aurora  m matrix".to_string(),
+        "dials: ] / [ density  = / - speed  . / , strikes  b bolt   Ctrl+G h close".to_string(),
     ];
+    hud_lines[1] = storm.fx_list();
 
     while !quit {
         // Resize: propagate host size to grid, renderer, and the child pty.
@@ -240,6 +243,12 @@ fn main() {
                                 }
                                 if let Some(status) = dial(&mut storm, b) {
                                     hud_lines[0] = status;
+                                    continue;
+                                }
+                                // effect toggles (t c k F e s g f h a m)
+                                if storm.toggle_effect(b).is_some() {
+                                    hud_lines[0] = storm.status();
+                                    hud_lines[1] = storm.fx_list();
                                     continue;
                                 }
                             }
