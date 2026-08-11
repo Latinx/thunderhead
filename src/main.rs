@@ -58,7 +58,7 @@ fn host_restore() {
 
 extern "C" fn cleanup_handler(sig: libc::c_int) {
     host_restore();
-    const SEQ: &[u8] = b"\x1b[?25h\x1b[0m\x1b[?1049l\r\n";
+    const SEQ: &[u8] = b"\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?25h\x1b[0m\x1b[?1049l\r\n";
     unsafe {
         libc::write(1, SEQ.as_ptr() as *const libc::c_void, SEQ.len());
         libc::signal(sig, libc::SIG_DFL);
@@ -100,6 +100,18 @@ fn refresh_hud(hud: &mut [String], storm: &storm::Storm) {
         hud[i] = line.clone();
     }
     hud[5] = storm.fx_list();
+}
+
+#[test]
+fn mouse_mode_parse_works() {
+    let mut p = crate::perform::Perform::new(24, 80);
+    let mut vte_parser = vte::Parser::new();
+    vte_parser.advance(&mut p, b"\x1b[?1002h\x1b[?1006h");
+    assert_eq!(p.mouse_mode, 1002, "tracking mode must be set");
+    assert!(p.mouse_sgr, "sgr encoding must be set");
+    vte_parser.advance(&mut p, b"\x1b[?1002l\x1b[?1006l");
+    assert_eq!(p.mouse_mode, 0, "tracking must clear");
+    assert!(!p.mouse_sgr);
 }
 
 fn main() {
@@ -164,6 +176,9 @@ fn main() {
     // dial-matched mid-stream. 0 = none, 1 = saw ESC, 2 = inside CSI/SS3.
     let mut esc_seq: u8 = 0;
     let mut hud_on = false;
+    // last mouse-mode state mirrored to the host terminal
+    let mut last_mouse_mode: u16 = 0;
+    let mut last_mouse_sgr = false;
     // The HUD panel: a vertical control deck, floats mid-right of the screen.
     // Line indexes are stable: 0-3 status, 4 palette swatch, 5 fx, 6-14
     // toggles, 15-18 dials.
@@ -302,6 +317,26 @@ fn main() {
             }
         }
 
+        // Mirror the child's mouse-mode request to the host terminal: with
+        // tracking on, the host routes the wheel to us as SGR mouse events
+        // (which we forward) instead of scrolling its native scrollback.
+        let want = perform.mouse_mode;
+        let want_sgr = perform.mouse_sgr;
+        if want != last_mouse_mode || want_sgr != last_mouse_sgr {
+            if last_mouse_mode != 0 {
+                out.extend_from_slice(b"\x1b[?1006l");
+                out.extend_from_slice(format!("\x1b[?{}l", last_mouse_mode).as_bytes());
+            }
+            if want != 0 {
+                out.extend_from_slice(format!("\x1b[?{}h", want).as_bytes());
+                if want_sgr {
+                    out.extend_from_slice(b"\x1b[?1006h");
+                }
+            }
+            last_mouse_mode = want;
+            last_mouse_sgr = want_sgr;
+        }
+
         // Storm + render.
         let dt = last_frame.elapsed().as_secs_f64().min(0.1);
         last_frame = Instant::now();
@@ -333,6 +368,8 @@ fn main() {
 
     let _ = child.kill();
     host_restore();
-    std::io::stdout().write_all(b"\x1b[?25h\x1b[0m\x1b[?1049l\r\n").unwrap();
+    std::io::stdout()
+        .write_all(b"\x1b[?1006l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?25h\x1b[0m\x1b[?1049l\r\n")
+        .unwrap();
     std::io::stdout().flush().unwrap();
 }

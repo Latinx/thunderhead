@@ -31,7 +31,10 @@ host stdin (raw) ──► forwarded verbatim to pty ─────────
   and current SGR state live here; alt screen is a buffer swap (`main_cells`).
   **Invariant: the storm never mutates the grid.**
 - `src/perform.rs` — `vte::Perform` impl: VT sequences → grid ops. Queues
-  DA1/DA2/DSR replies back to the child.
+  DA1/DA2/DSR replies back to the child. Tracks the child's mouse-mode
+  requests (1000/1002/1003 + 1006 SGR); the main loop mirrors them to the
+  host terminal so the wheel routes to the child as SGR mouse events
+  instead of the host's native scrollback. Both exit paths reset the modes.
 - `src/storm.rs` — ambient rain + lightning overlay, a port of TTE's
   thunderstorm mechanics: fast single-glyph rain (`\ . ,`, light blue
   `#aaaaff`, 30-90 cells/s; half the drops are wind-responsive and lean

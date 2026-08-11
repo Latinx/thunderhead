@@ -7,11 +7,21 @@ pub struct Perform {
     pub grid: Grid,
     /// Replies the child asked for (DA/DSR); drained by the main loop.
     pub replies: Vec<u8>,
+    /// The child's requested mouse tracking mode (0, 1000, 1002, 1003) and
+    /// SGR encoding (1006) — mirrored to the host terminal so the wheel
+    /// routes to the child instead of native scrollback.
+    pub mouse_mode: u16,
+    pub mouse_sgr: bool,
 }
 
 impl Perform {
     pub fn new(rows: usize, cols: usize) -> Self {
-        Perform { grid: Grid::new(rows, cols), replies: Vec::new() }
+        Perform {
+            grid: Grid::new(rows, cols),
+            replies: Vec::new(),
+            mouse_mode: 0,
+            mouse_sgr: false,
+        }
     }
 
     fn reply(&mut self, s: &[u8]) {
@@ -152,7 +162,15 @@ impl vte::Perform for Perform {
                                 self.grid.restore_cursor();
                             }
                         }
-                        _ => {} // bracketed paste, mouse, app cursor keys: accept, ignore
+                        1000 | 1002 | 1003 => {
+                            if action == 'h' {
+                                self.mouse_mode = p0;
+                            } else if self.mouse_mode == p0 {
+                                self.mouse_mode = 0;
+                            }
+                        }
+                        1006 => self.mouse_sgr = action == 'h',
+                        _ => {} // bracketed paste, app cursor keys: accept, ignore
                     }
                 }
                 // non-private SM/RM (autowrap etc.): accepted, no-op
