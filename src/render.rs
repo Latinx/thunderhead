@@ -151,7 +151,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, grid: &Grid, storm: &Storm, hud: Option<&[String]>, out: &mut Vec<u8>) {
+    pub fn render(&mut self, grid: &mut Grid, storm: &Storm, hud: Option<&[String]>, out: &mut Vec<u8>) {
         if grid.rows != self.rows || grid.cols != self.cols {
             self.rows = grid.rows;
             self.cols = grid.cols;
@@ -160,6 +160,34 @@ impl Renderer {
             self.dirty_all = true;
             out.extend_from_slice(b"\x1b[2J\x1b[H");
         }
+        // Replay the grid's scrolls as real terminal scrolls so the host's
+        // scrollback captures the scrolled lines (the diff would otherwise
+        // repaint positions and starve the scrollback). `last` shifts to
+        // match so only the newly exposed rows repaint.
+        let scrolls = std::mem::take(&mut grid.scrolls);
+        if !scrolls.is_empty() {
+            let cols = grid.cols;
+            for s in &scrolls {
+                out.extend_from_slice(format!("\x1b[{};{}r", s.top + 1, s.bottom + 1).as_bytes());
+                let seq = if s.up {
+                    format!("\x1b[{}S", s.n)
+                } else {
+                    format!("\x1b[{}T", s.n)
+                };
+                out.extend_from_slice(seq.as_bytes());
+                out.extend_from_slice(b"\x1b[r");
+                if s.up {
+                    let count = (s.bottom - s.top + 1 - s.n) * cols;
+                    self.last.copy_within((s.top + s.n) * cols..(s.top + s.n) * cols + count, s.top * cols);
+                    self.last[(s.bottom - s.n + 1) * cols..(s.bottom + 1) * cols].fill(Cell::default());
+                } else {
+                    let count = (s.bottom - s.top + 1 - s.n) * cols;
+                    self.last.copy_within(s.top * cols..s.top * cols + count, (s.top + s.n) * cols);
+                    self.last[s.top * cols..(s.top + s.n) * cols].fill(Cell::default());
+                }
+            }
+        }
+
         // corona tint level (0 when off) and screen shake — shake arms a full
         // repaint, so it must run BEFORE `full` is snapshotted below
         let corona = storm.corona_level();

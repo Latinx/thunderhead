@@ -66,7 +66,12 @@ host stdin (raw) ──► forwarded verbatim to pty ─────────
   ignores).
 - `src/render.rs` — diff renderer: composite = grid + storm per cell (storm
   wins by full cell replacement), reverse-video cursor overlay, emits only
-  changed runs (`\x1b[r;cH` + SGR) into a per-frame buffer.
+  changed runs (`\x1b[r;cH` + SGR) into a per-frame buffer. The grid records
+  scrolls (`Grid.scrolls`), and the renderer replays them as real terminal
+  scrolls (`\x1b[top;bottomr` + `\x1b[nS/T` + `\x1b[r`), shifting its `last`
+  tracking to match — this is what lets the host terminal build a scrollback
+  the wheel can scroll (CUP-only repaints starve it). Consecutive scrolls
+  of the same region merge; alt-screen transitions clear pending scrolls.
 - `src/main.rs` — host tty raw mode + SIGTERM/SIGHUP/SIGINT safety net (restore
   termios + leave alt screen before dying), PTY spawn via portable-pty, resize
   propagation (host size → grid → renderer → child pty), Ctrl+Q double-tap

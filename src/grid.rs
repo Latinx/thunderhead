@@ -53,6 +53,16 @@ fn char_width(ch: char) -> u8 {
     }
 }
 
+/// A scroll the terminal must replay so ITS scrollback captures the lines
+/// (the diff renderer otherwise repaints positions and starves the scrollback).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollEvent {
+    pub top: usize,
+    pub bottom: usize, // inclusive
+    pub n: usize,
+    pub up: bool,
+}
+
 pub struct Grid {
     pub rows: usize,
     pub cols: usize,
@@ -72,6 +82,8 @@ pub struct Grid {
     wrap_next: bool,
     pub cursor_visible: bool,
     pub last_char: char,
+    /// pending scrolls for the renderer to replay into the terminal
+    pub scrolls: Vec<ScrollEvent>,
 }
 
 fn cell_index(cols: usize, r: usize, c: usize) -> usize {
@@ -99,6 +111,7 @@ impl Grid {
             wrap_next: false,
             cursor_visible: true,
             last_char: ' ',
+            scrolls: Vec::new(),
         };
         g.set_scroll_region(0, rows.saturating_sub(1));
         g
@@ -216,9 +229,25 @@ impl Grid {
         }
     }
 
+    fn record_scroll(&mut self, n: usize, up: bool) {
+        if n == 0 {
+            return;
+        }
+        let ev = ScrollEvent { top: self.scroll_top, bottom: self.scroll_bottom, n, up };
+        if let Some(last) = self.scrolls.last_mut() {
+            // merge consecutive same-region same-direction scrolls
+            if last.up == up && last.top == ev.top && last.bottom == ev.bottom {
+                last.n = (last.n + n).min(last.bottom - last.top + 1);
+                return;
+            }
+        }
+        self.scrolls.push(ev);
+    }
+
     pub fn scroll_up(&mut self, n: usize) {
         let region = self.scroll_bottom - self.scroll_top + 1;
         let n = n.min(region);
+        self.record_scroll(n, true);
         for r in self.scroll_top..=(self.scroll_bottom - n) {
             let src = cell_index(self.cols, r + n, 0);
             let dst = cell_index(self.cols, r, 0);
@@ -234,6 +263,7 @@ impl Grid {
     pub fn scroll_down(&mut self, n: usize) {
         let region = self.scroll_bottom - self.scroll_top + 1;
         let n = n.min(region);
+        self.record_scroll(n, false);
         for r in (self.scroll_top + n..=self.scroll_bottom).rev() {
             let src = cell_index(self.cols, r - n, 0);
             let dst = cell_index(self.cols, r, 0);
@@ -392,6 +422,7 @@ impl Grid {
     }
 
     pub fn enter_alt(&mut self) {
+        self.scrolls.clear();
         if !self.alt {
             self.main_cells = self.cells.clone();
             self.cells.fill(Cell::default());
@@ -402,6 +433,7 @@ impl Grid {
     }
 
     pub fn leave_alt(&mut self) {
+        self.scrolls.clear();
         if self.alt {
             self.cells = self.main_cells.clone();
             self.alt = false;
@@ -503,6 +535,30 @@ mod wide_tests {
 }
 
 #[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn scrolls_recorded_and_merged() {
+        let mut g = Grid::new(24, 80);
+        for r in 0..24 {
+            for c in 0..80 {
+                g.set(r, c, Cell { ch: 'a', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 1 });
+            }
+        }
+        g.cursor_row = 23; // bottom: lf now scrolls
+        g.lf();
+        g.lf();
+        assert_eq!(g.scrolls.len(), 1, "consecutive scrolls merge");
+        assert_eq!(g.scrolls[0], ScrollEvent { top: 0, bottom: 23, n: 2, up: true });
+        g.scroll_down(1);
+        assert_eq!(g.scrolls.len(), 2, "opposite direction appends");
+        assert!(!g.scrolls[1].up);
+        g.enter_alt();
+        assert!(g.scrolls.is_empty(), "alt transition clears pending scrolls");
+    }
+}
+
 mod wrap_tests {
     use super::*;
 

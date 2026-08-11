@@ -342,7 +342,7 @@ fn main() {
         last_frame = Instant::now();
         storm.tick(dt, perform.grid.cols, perform.grid.rows);
         let hud_view = if hud_on { Some(hud_lines.as_slice()) } else { None };
-        renderer.render(&perform.grid, &storm, hud_view, &mut out);
+        renderer.render(&mut perform.grid, &storm, hud_view, &mut out);
         if !out.is_empty() {
             std::io::stdout().write_all(&out).unwrap();
             std::io::stdout().flush().unwrap();
@@ -359,7 +359,7 @@ fn main() {
                 }
             }
             renderer.force_redraw();
-            renderer.render(&perform.grid, &storm, None, &mut out);
+            renderer.render(&mut perform.grid, &storm, None, &mut out);
             std::io::stdout().write_all(&out).unwrap();
             std::io::stdout().flush().unwrap();
             quit = true;
