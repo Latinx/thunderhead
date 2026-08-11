@@ -44,15 +44,17 @@ host stdin (raw) ──► forwarded verbatim to pty ─────────
   edge), fog bands (wavy glowing haze that dims text), hail, aurora
   (wavy curtains that bloom a glow into the bg instead of inheriting
   it), matrix (halfwidth katakana rain), meteors (diagonal streaks
-  with white-hot heads and tapering ember trails). All overlay-only;
-  `tick()` advances drops/bolt/sparks/glow/front/rings/embers/meteors/
-  clocks; `overlay(base, row, col) -> Option<Cell>` composites.
-  Structurally read-only w.r.t. the grid. Storm cells inherit
-  `base.bg` — except the aurora, fog, front edge, and meteor heads,
-  which paint a dim hue into the background for their glow. Colors
-  render via `38;2;` RGB — do not regress the SGR prefix bug
-  (`b'3'` formats as 51 → invalid `518;2;` the terminal silently
-  ignores).
+  with white-hot heads and tapering ember trails; rate = `1`/`2`,
+  trail size = `3`/`4`, both clamped). `C` re-rolls the runtime
+  palette (rain/spark/aurora/corona colors are fields, not consts —
+  meteors stay white-hot). All overlay-only; `tick()` advances
+  drops/bolt/sparks/glow/front/rings/embers/meteors/clocks;
+  `overlay(base, row, col) -> Option<Cell>` composites. Structurally
+  read-only w.r.t. the grid. Storm cells inherit `base.bg` — except
+  the aurora, fog, front edge, and meteor heads, which paint a dim
+  hue into the background for their glow. Colors render via `38;2;`
+  RGB — do not regress the SGR prefix bug (`b'3'` formats as 51 →
+  invalid `518;2;` the terminal silently ignores).
 - `src/render.rs` — diff renderer: composite = grid + storm per cell (storm
   wins by full cell replacement), reverse-video cursor overlay, emits only
   changed runs (`\x1b[r;cH` + SGR) into a per-frame buffer.

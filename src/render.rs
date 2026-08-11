@@ -115,14 +115,15 @@ impl Renderer {
             Some(o) => o,
             None => {
                 if corona > 0.0 {
-                    // corona: the whole screen tints cool blue while the
-                    // flash is fresh — the lightning becomes a moment
+                    // corona: the whole screen tints toward the storm's
+                    // palette while the flash is fresh — a moment, not a line
+                    let (cr, cg, cb) = storm.corona_color();
                     let mut lit = base;
                     if let Color::Rgb(red, green, blue) = base.fg {
                         lit.fg = Color::Rgb(
-                            lerp(red, 0x9F, corona),
-                            lerp(green, 0xB8, corona),
-                            lerp(blue, 0xFF, corona),
+                            lerp(red, cr, corona),
+                            lerp(green, cg, corona),
+                            lerp(blue, cb, corona),
                         );
                     }
                     return lit;

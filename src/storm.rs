@@ -20,8 +20,6 @@
 use crate::grid::{Cell, Color};
 
 // ─── Tunables ───────────────────────────────────────────────────────────────
-const RAIN_COLOR: Color = Color::Rgb(0xAA, 0xAA, 0xFF);
-const SPARK_COLOR: Color = Color::Rgb(0xFF, 0x4D, 0x00);
 const WIND_DRIFT: f64 = 12.0; // cells/s of horizontal drift at full wind
 const WIND_EPS: f64 = 0.15; // below this the rain falls vertically (`.`/`,`)
 const BOLT_TTL: f64 = 0.5; // seconds the flash line stays lit — instant to appear, but it lingers long enough to read
@@ -74,6 +72,23 @@ fn heat_color(strength: f64) -> (u8, u8, u8) {
 
 fn lerp(a: u8, b: u8, t: f64) -> u8 {
     (a as f64 + (b as f64 - a as f64) * t).clamp(0.0, 255.0) as u8
+}
+
+/// HSL -> RGB (h in degrees 0..360, s/l 0..1).
+fn hsl(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = (h / 60.0).rem_euclid(6.0);
+    let x = c * (1.0 - (hp.rem_euclid(2.0) - 1.0).abs());
+    let (r1, g1, b1) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    (((r1 + m) * 255.0) as u8, ((g1 + m) * 255.0) as u8, ((b1 + m) * 255.0) as u8)
 }
 
 // ─── Storm entities ─────────────────────────────────────────────────────────
@@ -149,6 +164,15 @@ pub struct Storm {
     rain_density: f64,          // fraction of columns with falling rain
     rain_speed: (f64, f64),     // (min, max) cells/s
     strike_interval: (f64, f64), // (min, max) seconds between strikes
+    // runtime palette — C re-rolls it from a random hue
+    rain_color: Color,
+    spark_color: Color,
+    aurora_lo: (u8, u8, u8),   // aurora top (purple-ish)
+    aurora_mid: (u8, u8, u8),  // aurora mid (teal-ish)
+    aurora_hi: (u8, u8, u8),   // aurora bottom (green-ish)
+    corona_color: (u8, u8, u8),
+    meteor_interval: f64,       // mean seconds between meteors
+    meteor_len: f64,            // trail length in cells
     // effect toggles — flipped from the HUD panel (Ctrl+G h, then a key)
     fx_rain: bool,
     fx_trails: bool,
@@ -195,6 +219,14 @@ impl Storm {
             rain_density: 0.45,
             rain_speed: (30.0, 90.0),
             strike_interval: (4.5, 8.0),
+            rain_color: Color::Rgb(0xAA, 0xAA, 0xFF),
+            spark_color: Color::Rgb(0xFF, 0x4D, 0x00),
+            aurora_lo: (0xC9, 0xA8, 0xFF),
+            aurora_mid: (0x6E, 0xFF, 0xFF),
+            aurora_hi: (0x80, 0xFF, 0xB0),
+            corona_color: (0x9F, 0xB8, 0xFF),
+            meteor_interval: 4.5,
+            meteor_len: 12.0,
             // default on: the storm-feel set; fog/hail/aurora/matrix opt-in
             fx_rain: true,
             fx_trails: true,
@@ -251,6 +283,36 @@ impl Storm {
     pub fn dial_strike(&mut self, dir: f64) {
         let f = 1.0 + 0.2 * dir;
         self.strike_interval = ((self.strike_interval.0 * f).clamp(1.0, 15.0), (self.strike_interval.1 * f).clamp(2.0, 25.0));
+    }
+
+    /// `1` / `2` — meteor spawn interval, ∓20% per step (2 = more meteors).
+    pub fn dial_meteor_rate(&mut self, dir: f64) {
+        let f = 1.0 - 0.2 * dir;
+        self.meteor_interval = (self.meteor_interval * f).clamp(0.8, 20.0);
+    }
+
+    /// `3` / `4` — meteor trail length, ±2 cells per step.
+    pub fn dial_meteor_size(&mut self, dir: f64) {
+        self.meteor_len = (self.meteor_len + 2.0 * dir).clamp(4.0, 30.0);
+    }
+
+    /// `C` — re-roll the whole palette from a random hue (meteors stay
+    /// white-hot — they're physical).
+    pub fn randomize_colors(&mut self) {
+        let h = self.rand() * 360.0;
+        let rain = hsl(h, 0.45, 0.85);
+        let spark = hsl((h + 40.0) % 360.0, 0.85, 0.55);
+        self.rain_color = Color::Rgb(rain.0, rain.1, rain.2);
+        self.spark_color = Color::Rgb(spark.0, spark.1, spark.2);
+        self.aurora_lo = hsl((h + 180.0) % 360.0, 0.75, 0.72);
+        self.aurora_mid = hsl((h + 240.0) % 360.0, 0.75, 0.72);
+        self.aurora_hi = hsl((h + 300.0) % 360.0, 0.75, 0.72);
+        self.corona_color = hsl(h, 0.6, 0.85);
+    }
+
+    /// The corona tint color, for the renderer.
+    pub fn corona_color(&self) -> (u8, u8, u8) {
+        self.corona_color
     }
 
     /// `b` — force a strike on the next tick.
@@ -408,12 +470,14 @@ impl Storm {
     /// Current dial values, for the on-screen HUD.
     pub fn status(&self) -> String {
         format!(
-            "storm  rain {:>3.0}%  speed {:>3.0}-{:>3.0} c/s  strike {:.1}-{:.1}s",
+            "storm  rain {:>3.0}%  speed {:>3.0}-{:>3.0} c/s  strike {:.1}-{:.1}s  meteor {:.1}s/{:.0}c",
             self.rain_density * 100.0,
             self.rain_speed.0,
             self.rain_speed.1,
             self.strike_interval.0,
             self.strike_interval.1,
+            self.meteor_interval,
+            self.meteor_len,
         )
     }
 
@@ -694,9 +758,9 @@ impl Storm {
             let dx = (self.rand() * 2.0 - 1.0) * 55.0;
             let dy = 70.0 + self.rand() * 70.0;
             let dur = 1.2 + self.rand() * 0.8;
-            let len = 8.0 + self.rand() * 9.0;
+            let len = self.meteor_len * (0.7 + self.rand() * 0.6);
             self.meteors.push(Meteor { x0, y0, dx, dy, t: 0.0, dur, len });
-            self.next_meteor = self.t + 2.5 + self.rand() * 4.0;
+            self.next_meteor = self.t + self.meteor_interval * (0.6 + self.rand() * 0.8);
         }
         let mut burnouts: Vec<(f64, f64)> = Vec::new();
         for m in self.meteors.iter_mut() {
@@ -797,7 +861,7 @@ impl Storm {
             let (x, y) = self.spark_pos(s);
             if y.floor() as usize == row && x.floor() as usize == col {
                 let cool = (s.t * 1.2).min(1.0);
-                let (sr, sg, sb) = match SPARK_COLOR {
+                let (sr, sg, sb) = match self.spark_color {
                     Color::Rgb(r, g, b) => (r, g, b),
                     _ => (0xFF, 0x4D, 0x00),
                 };
@@ -899,7 +963,7 @@ impl Storm {
                 } else if self.fx_matrix {
                     (Color::Rgb(0x00, 0xFF, 0x70), true)
                 } else {
-                    (RAIN_COLOR, false)
+                    (self.rain_color, false)
                 };
                 return Some(Cell {
                     ch: d.glyph,
@@ -914,7 +978,11 @@ impl Storm {
                 let (tg, tf) = if self.fx_matrix {
                     (d.glyph, Color::Rgb(0x00, 0x90, 0x40))
                 } else {
-                    (':', Color::Rgb(0x88, 0x88, 0xCC))
+                    let (rr, gg, bb) = match self.rain_color {
+                        Color::Rgb(r, g, b) => (r, g, b),
+                        _ => (0x88, 0x88, 0xCC),
+                    };
+                    (':', Color::Rgb((rr as f64 * 0.55) as u8, (gg as f64 * 0.55) as u8, (bb as f64 * 0.55) as u8))
                 };
                 return Some(Cell {
                     ch: tg,
@@ -955,8 +1023,12 @@ impl Storm {
                     let wisp = ((row.wrapping_mul(2654435761) >> 24) % 100) as f64 / 100.0;
                     let density = edge * (0.25 + 0.75 * wisp);
                     if h.rem_euclid(4) < (density * 3.0).round() as i64 {
-                        // white-blue at the edge -> normal rain behind
-                        let fg = Color::Rgb(lerp(0xAA, 0xE8, edge), lerp(0xAA, 0xF4, edge), lerp(0xFF, 0xFF, edge));
+                        // white at the edge -> normal rain behind
+                        let (fr, fgg, fb) = match self.rain_color {
+                            Color::Rgb(r, g, b) => (r, g, b),
+                            _ => (0xAA, 0xAA, 0xFF),
+                        };
+                        let fg = Color::Rgb(lerp(fr, 0xE8, edge), lerp(fgg, 0xF4, edge), lerp(fb, 0xFF, edge));
                         let gk = ((density - 0.35) * 1.5).max(0.0).min(1.0);
                         let glow = Color::Rgb(
                             lerp(0x00, 0x4E, gk * 0.4),
@@ -1049,12 +1121,15 @@ impl Storm {
                 let intensity = fade * (0.05 + 0.95 * ray) * shimmer * (1.0 + self.flash_level() * 0.7);
                 // smooth gradient, bottom green -> mid teal -> top purple
                 let g = ((v + 1.0) / 2.0 + t * 0.04).fract();
+                let (hi_r, hi_g, hi_b) = self.aurora_hi;
+                let (mid_r, mid_g, mid_b) = self.aurora_mid;
+                let (lo_r, lo_g, lo_b) = self.aurora_lo;
                 let (cr, cg, cb) = if g < 0.5 {
                     let k = g * 2.0;
-                    (lerp(0x80, 0x6E, k), lerp(0xFF, 0xFF, k), lerp(0xB0, 0xFF, k))
+                    (lerp(hi_r, mid_r, k), lerp(hi_g, mid_g, k), lerp(hi_b, mid_b, k))
                 } else {
                     let k = (g - 0.5) * 2.0;
-                    (lerp(0x6E, 0xC9, k), lerp(0xFF, 0xA8, k), lerp(0xFF, 0xFF, k))
+                    (lerp(mid_r, lo_r, k), lerp(mid_g, lo_g, k), lerp(mid_b, lo_b, k))
                 };
                 // the curtain does NOT inherit the base bg — it paints a dim
                 // aurora hue into the background, so it blooms as a glow field
@@ -1253,7 +1328,48 @@ mod effect_tests {
     
     
     
+    
     #[test]
+    fn hsl_maps_primary_hues() {
+        assert_eq!(hsl(0.0, 1.0, 0.5), (255, 0, 0));
+        assert_eq!(hsl(120.0, 1.0, 0.5), (0, 255, 0));
+        assert_eq!(hsl(240.0, 1.0, 0.5), (0, 0, 255));
+    }
+
+    #[test]
+    fn randomize_colors_rerolls_the_palette() {
+        let mut s = Storm::new();
+        let before = s.rain_color;
+        s.randomize_colors();
+        assert_ne!(s.rain_color, before, "rain color must change");
+        let (_r, _g, _b) = s.corona_color();
+        // the aurora anchors follow the same hue family
+        assert!(s.aurora_hi != s.aurora_lo);
+    }
+
+    #[test]
+    fn meteor_dials_clamp() {
+        let mut s = Storm::new();
+        for _ in 0..50 {
+            s.dial_meteor_rate(1.0);
+        }
+        assert!(s.meteor_interval >= 0.8);
+        for _ in 0..50 {
+            s.dial_meteor_rate(-1.0);
+        }
+        assert!(s.meteor_interval <= 20.0);
+        for _ in 0..50 {
+            s.dial_meteor_size(1.0);
+        }
+        assert!(s.meteor_len <= 30.0);
+        for _ in 0..50 {
+            s.dial_meteor_size(-1.0);
+        }
+        assert!(s.meteor_len >= 4.0);
+        assert!(s.status().contains("meteor"));
+    }
+
+#[test]
     fn meteors_spawn_streak_and_burn_out() {
         let mut s = Storm::new();
         assert_eq!(s.toggle_effect(b'M'), Some("meteors"));
@@ -1366,7 +1482,6 @@ mod effect_tests {
             s.front = Some((40.0, dir, 70.0));
             let mut per_col = vec![0usize; 80];
             let mut total = 0;
-            let mut cols_used = 0usize;
             for r in 0..24 {
                 for c in 0..80 {
                     if let Some(cell) = s.overlay(blank, r, c) {
@@ -1377,7 +1492,7 @@ mod effect_tests {
                 }
             }
             assert!(total > 0, "the front band must render some glyphs");
-            cols_used = per_col.iter().filter(|&&n| n > 0).count();
+            let cols_used = per_col.iter().filter(|&&n| n > 0).count();
             assert!(cols_used >= 4, "the band must span several columns, got {cols_used}");
             assert!(per_col.iter().all(|&n| n < 24), "no column may be a full-height line");
         }

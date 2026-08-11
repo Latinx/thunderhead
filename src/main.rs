@@ -86,6 +86,10 @@ fn dial(storm: &mut storm::Storm, b: u8) -> Option<String> {
         b'.' => storm.dial_strike(1.0),
         b',' => storm.dial_strike(-1.0),
         b'b' => storm.force_strike(),
+        b'1' => storm.dial_meteor_rate(-1.0),
+        b'2' => storm.dial_meteor_rate(1.0),
+        b'3' => storm.dial_meteor_size(-1.0),
+        b'4' => storm.dial_meteor_size(1.0),
         _ => return None,
     }
     Some(storm.status())
@@ -160,6 +164,7 @@ fn main() {
         String::new(), // fx line, filled once the storm exists
         "r rain  t trails  c corona  k shake  F forks  e embers".to_string(),
         "s splash  g fronts  f fog  h hail  a aurora  m matrix  M meteors".to_string(),
+        "C randomize colors   1 / 2 meteor rate   3 / 4 meteor size".to_string(),
         "dials: ] / [ density  = / - speed  . / , strikes  b bolt   Ctrl+G h close".to_string(),
     ];
     hud_lines[1] = storm.fx_list();
@@ -241,11 +246,16 @@ fn main() {
                                     esc_seq = 1;
                                     continue;
                                 }
+                                if b == b'C' {
+                                    // re-roll the palette, for shits and giggles
+                                    storm.randomize_colors();
+                                    continue;
+                                }
                                 if let Some(status) = dial(&mut storm, b) {
                                     hud_lines[0] = status;
                                     continue;
                                 }
-                                // effect toggles (t c k F e s g f h a m)
+                                // effect toggles (r t c k F e s g f h a m M)
                                 if storm.toggle_effect(b).is_some() {
                                     hud_lines[0] = storm.status();
                                     hud_lines[1] = storm.fx_list();

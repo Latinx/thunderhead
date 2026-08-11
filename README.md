@@ -61,6 +61,9 @@ Unix-only). Your shell (`$SHELL`) is spawned inside.
     (sweeping gust bands), `fog` (drifting glowing haze), `hail` (big
     bright drops), `aurora` (glowing curtains), `matrix` (green katakana
     rain), `meteors` (bright diagonal streaks)
+  - `1` / `2` — meteor spawn rate down / up (trail length via `3` / `4`)
+  - `C` — re-roll the whole palette from a random hue (rain, sparks,
+    aurora, corona tint; meteors stay white-hot)
   - `Ctrl+G h` again turns the panel (and the armed controls) off.
   With the panel hidden, the dials still work behind `Ctrl+G` (silently).
 - The terminal is restored on SIGTERM/SIGHUP/SIGINT too.
