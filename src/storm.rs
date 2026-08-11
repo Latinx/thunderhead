@@ -138,6 +138,7 @@ pub struct Storm {
     rain_speed: (f64, f64),     // (min, max) cells/s
     strike_interval: (f64, f64), // (min, max) seconds between strikes
     // effect toggles — flipped from the HUD panel (Ctrl+G h, then a key)
+    fx_rain: bool,
     fx_trails: bool,
     fx_corona: bool,
     fx_shake: bool,
@@ -180,6 +181,7 @@ impl Storm {
             rain_speed: (30.0, 90.0),
             strike_interval: (4.5, 8.0),
             // default on: the storm-feel set; fog/hail/aurora/matrix opt-in
+            fx_rain: true,
             fx_trails: true,
             fx_corona: true,
             fx_shake: true,
@@ -241,6 +243,10 @@ impl Storm {
     /// `t c k F e s g f h a m` — flip an effect; returns its name if known.
     pub fn toggle_effect(&mut self, key: u8) -> Option<&'static str> {
         match key {
+            b'r' => {
+                self.fx_rain = !self.fx_rain;
+                Some("rain")
+            }
             b't' => {
                 self.fx_trails = !self.fx_trails;
                 Some("trails")
@@ -293,6 +299,9 @@ impl Storm {
     /// Names of the enabled effects, for the HUD fx line.
     pub fn fx_list(&self) -> String {
         let mut on: Vec<&str> = Vec::new();
+        if self.fx_rain {
+            on.push("rain");
+        }
         if self.fx_trails {
             on.push("trails");
         }
@@ -333,11 +342,8 @@ impl Storm {
         }
     }
 
-    /// Whole-screen cool tint while the flash is fresh (corona effect).
-    pub fn corona_level(&self) -> f64 {
-        if !self.fx_corona {
-            return 0.0;
-        }
+    /// 0..1 — how fresh the flash is (max wake intensity across the bolt).
+    fn flash_level(&self) -> f64 {
         let Some(b) = &self.bolt else { return 0.0 };
         b.path
             .iter()
@@ -345,7 +351,15 @@ impl Storm {
                 kitt_intensity(1.0 - (ttl / BOLT_TTL).clamp(0.0, 1.0)).max(0.0).min(1.0)
             })
             .fold(0.0, f64::max)
-            * 0.45
+    }
+
+    /// Whole-screen cool tint while the flash is fresh (corona effect).
+    pub fn corona_level(&self) -> f64 {
+        if self.fx_corona {
+            self.flash_level() * 0.45
+        } else {
+            0.0
+        }
     }
 
     pub fn shake_level(&self) -> f64 {
@@ -404,6 +418,9 @@ impl Storm {
     }
 
     fn spawn_drop(&mut self, cols: usize, rows: usize) {
+        if !self.fx_rain {
+            return; // rain toggled off: no new drops (matrix included)
+        }
         let col = self.rand() * cols as f64;
         let row = -(rows as f64) * self.rand() * 0.4; // start above the screen
         let base_speed = self.rain_speed.0 + self.rand() * (self.rain_speed.1 - self.rain_speed.0);
@@ -528,52 +545,58 @@ impl Storm {
 
         self.gust(dt);
 
-        // rain: fast TTE-style drops across a dialable share of columns
-        let target = ((cols as f64) * self.rain_density).max(4.0) as usize;
-        while self.drops.len() < target {
-            self.spawn_drop(cols, rows);
-        }
-        let lean = lean_for(self.wind);
-        for d in self.drops.iter_mut() {
-            d.row += d.speed * dt;
-            if d.leanable {
-                // wind-blown: drifts sideways and leans with the gust
-                d.col += self.wind * WIND_DRIFT * dt;
-                d.glyph = lean.unwrap_or(d.vertical);
-            } else {
-                // vertical drops keep falling straight, always
-                d.glyph = d.vertical;
+        // rain: fast TTE-style drops across a dialable share of columns;
+        // the whole block is gated so toggling rain off can't spin the
+        // spawn loop (spawn_drop early-returns while the flag is off)
+        if self.fx_rain {
+            let target = ((cols as f64) * self.rain_density).max(4.0) as usize;
+            while self.drops.len() < target {
+                self.spawn_drop(cols, rows);
             }
-        }
-        self.drops.retain(|d| d.row < rows as f64 + 1.0);
-        // hail chips and splash rings where drops cross the bottom edge
-        let mut chips: Vec<f64> = Vec::new();
-        let mut ripples: Vec<usize> = Vec::new();
-        for d in self.drops.iter() {
-            if d.row >= rows as f64 - 0.5 && d.row < rows as f64 + 1.0 {
-                if d.hail && self.fx_hail {
-                    chips.push(d.col);
-                } else if self.fx_splash && self.rings.len() < 16 {
-                    ripples.push(d.col as usize);
+            let lean = lean_for(self.wind);
+            for d in self.drops.iter_mut() {
+                d.row += d.speed * dt;
+                if d.leanable {
+                    // wind-blown: drifts sideways and leans with the gust
+                    d.col += self.wind * WIND_DRIFT * dt;
+                    d.glyph = lean.unwrap_or(d.vertical);
+                } else {
+                    // vertical drops keep falling straight, always
+                    d.glyph = d.vertical;
                 }
             }
-        }
-        for col in chips {
-            let x1 = col + (self.rand() * 4.0 - 2.0);
-            self.sparks.push(Spark {
-                x0: col,
-                y0: rows.saturating_sub(1) as f64,
-                cx: col,
-                cy: rows as f64 * 0.5,
-                x1,
-                y1: rows.saturating_sub(1) as f64,
-                t: 0.0,
-                dur: 0.3,
-                glyph: '*',
-            });
-        }
-        for rc in ripples {
-            self.rings.push((rows.saturating_sub(1), rc, 0.0));
+            self.drops.retain(|d| d.row < rows as f64 + 1.0);
+            // hail chips and splash rings where drops cross the bottom edge
+            let mut chips: Vec<f64> = Vec::new();
+            let mut ripples: Vec<usize> = Vec::new();
+            for d in self.drops.iter() {
+                if d.row >= rows as f64 - 0.5 && d.row < rows as f64 + 1.0 {
+                    if d.hail && self.fx_hail {
+                        chips.push(d.col);
+                    } else if self.fx_splash && self.rings.len() < 16 {
+                        ripples.push(d.col as usize);
+                    }
+                }
+            }
+            for col in chips {
+                let x1 = col + (self.rand() * 4.0 - 2.0);
+                self.sparks.push(Spark {
+                    x0: col,
+                    y0: rows.saturating_sub(1) as f64,
+                    cx: col,
+                    cy: rows as f64 * 0.5,
+                    x1,
+                    y1: rows.saturating_sub(1) as f64,
+                    t: 0.0,
+                    dur: 0.3,
+                    glyph: '*',
+                });
+            }
+            for rc in ripples {
+                self.rings.push((rows.saturating_sub(1), rc, 0.0));
+            }
+        } else {
+            self.drops.clear();
         }
 
         // lightning: an instant full-line flash, then the line fades
@@ -854,20 +877,65 @@ impl Storm {
             }
         }
 
-        // aurora: slow roiling bands across the top of the screen
-        if self.fx_aurora && row < self.rows / 4 && base.ch == ' ' {
-            let shift = (self.aurora_t * 14.0) as i64;
-            if (col as i64 + shift + (row as i64) * 3).rem_euclid(5) == 0 {
-                let palette = [(0x5F, 0xE8, 0x9C), (0x6E, 0x9C, 0xFF), (0xA8, 0x8C, 0xFF), (0x4C, 0xD9, 0xD9)];
-                let (ar, ag, ab) = palette[(row + (self.aurora_t * 3.0) as usize + col / 40) % 4];
-                return Some(Cell {
-                    ch: '~',
-                    fg: Color::Rgb(ar, ag, ab),
-                    bg: base.bg,
-                    bold: false,
-                    reverse: false,
-                    width: 1,
-                });
+        // aurora: roiling curtains with vertical rays — the curtain core is a
+        // stack of sine waves undulating with column and time, each column has
+        // a fixed ray personality, intensity fades parabolically toward the
+        // edges, and the color runs a continuous green->teal->purple gradient
+        // that drifts. It flares briefly when lightning strikes.
+        if self.fx_aurora && base.ch == ' ' && row < self.rows * 2 / 3 {
+            let t = self.aurora_t;
+            let c = col as f64;
+            let center = 2.5 + 2.2 * (c * 0.045 + t * 0.6).sin() + 1.6 * (c * 0.09 - t * 0.35).sin();
+            let half = 2.8 + 1.2 * (c * 0.03 - t * 0.2).sin();
+            let v = (row as f64 - center) / half; // -1..1 across the curtain
+            if v.abs() < 1.0 {
+                let ray = ((col.wrapping_mul(2654435761) >> 24) % 100) as f64 / 100.0;
+                let shimmer = 0.75 + 0.25 * (t * 1.8 + c * 0.25).sin();
+                let fade = (1.0 - v * v).max(0.0); // bright core, soft edges
+                let intensity = fade * (0.05 + 0.95 * ray) * shimmer * (1.0 + self.flash_level() * 0.7);
+                // smooth gradient, bottom green -> mid teal -> top purple
+                let g = ((v + 1.0) / 2.0 + t * 0.04).fract();
+                let (cr, cg, cb) = if g < 0.5 {
+                    let k = g * 2.0;
+                    (lerp(0x5F, 0x4C, k), lerp(0xE8, 0xD9, k), lerp(0x9C, 0xD9, k))
+                } else {
+                    let k = (g - 0.5) * 2.0;
+                    (lerp(0x4C, 0xA8, k), lerp(0xD9, 0x8C, k), lerp(0xD9, 0xFF, k))
+                };
+                // the curtain does NOT inherit the base bg — it paints a dim
+                // aurora hue into the background, so it blooms as a glow field
+                let glow_k = (intensity * 1.4).min(1.0);
+                let glow = Color::Rgb(
+                    lerp(0x00, cr, glow_k * 0.30),
+                    lerp(0x00, cg, glow_k * 0.30),
+                    lerp(0x00, cb, glow_k * 0.30),
+                );
+                if intensity >= 0.40 {
+                    let ch = if intensity > 0.72 { '~' } else { '·' };
+                    return Some(Cell {
+                        ch,
+                        fg: Color::Rgb(
+                            lerp(0x20, cr, glow_k),
+                            lerp(0x28, cg, glow_k),
+                            lerp(0x30, cb, glow_k),
+                        ),
+                        bg: glow,
+                        bold: intensity > 0.85,
+                        reverse: false,
+                        width: 1,
+                    });
+                }
+                // halo: bg-only glow, no glyph
+                if intensity >= 0.18 {
+                    return Some(Cell {
+                        ch: ' ',
+                        fg: Color::Default,
+                        bg: glow,
+                        bold: false,
+                        reverse: false,
+                        width: 1,
+                    });
+                }
             }
         }
 
@@ -1028,7 +1096,76 @@ mod effect_tests {
     }
 
     
+    
+    
     #[test]
+    fn rain_toggle_stops_spawning_without_spinning() {
+        let mut s = Storm::new();
+        s.tick(0.1, 80, 24);
+        assert!(!s.drops.is_empty(), "rain spawns by default");
+        s.toggle_effect(b'r');
+        assert!(!s.fx_rain);
+        s.tick(0.1, 80, 24); // must terminate: no infinite spawn loop
+        assert!(s.drops.is_empty(), "rain off clears drops");
+        s.tick(0.1, 80, 24); // stays empty, still no hang
+        assert!(s.drops.is_empty());
+        s.toggle_effect(b'r');
+        s.tick(0.1, 80, 24);
+        assert!(!s.drops.is_empty(), "rain on respawns");
+    }
+
+#[test]
+    fn aurora_is_curtains_not_a_lattice() {
+        let mut s = Storm::new();
+        s.fx_aurora = true;
+        s.rows = 24;
+        s.aurora_t = 5.0;
+        let blank = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 1 };
+        let mut total = 0usize;
+        let mut glyphs = 0usize;
+        let mut halos = 0usize;
+        let mut per_row = vec![0usize; 24];
+        let mut colors = std::collections::HashSet::new();
+        for r in 0..24 {
+            for c in 0..80 {
+                if let Some(cell) = s.overlay(blank, r, c) {
+                    if cell.ch == '~' || cell.ch == '\u{b7}' {
+                        glyphs += 1;
+                        colors.insert(cell.fg);
+                    } else if cell.ch == ' ' && cell.bg != Color::Default {
+                        halos += 1; // bg-only glow cell
+                        colors.insert(cell.bg);
+                    } else {
+                        panic!("unexpected aurora cell {cell:?}");
+                    }
+                    per_row[r] += 1;
+                    total += 1;
+                }
+            }
+        }
+        assert!(glyphs > 0, "aurora must render glyphs");
+        assert!(halos > 0, "aurora must bloom a bg glow halo");
+        // sparse: no row may be a solid lattice, and the whole thing stays wispy
+        // the curtain is confined to the sky: nothing below the top third
+        assert!(per_row[8..].iter().all(|&n| n == 0), "aurora must stay in the sky (got {per_row:?})");
+        assert!(total < 80 * 24 / 3, "aurora must stay under a third of the screen");
+        // ray structure: column fill varies — not a uniform lattice
+        let mut per_col = vec![0usize; 80];
+        for r in 0..8 {
+            for c in 0..80 {
+                if let Some(cell) = s.overlay(blank, r, c) {
+                    if cell.ch != ' ' {
+                        per_col[c] += 1;
+                    }
+                }
+            }
+        }
+        assert!(*per_col.iter().max().unwrap() < 8, "no column may be solid");
+        assert!(per_col.iter().filter(|&&n| n == 0).count() > 0, "the curtain must have gaps");
+        assert!(colors.len() >= 2, "the gradient must vary color");
+    }
+
+#[test]
     fn gust_front_is_a_band_not_a_scan_line() {
         // a gust front must be a dense region of leaning rain, never a hard
         // full-height line at one column (the old jitter read as a scan line)

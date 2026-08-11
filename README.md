@@ -54,12 +54,12 @@ Unix-only). Your shell (`$SHELL`) is spawned inside.
   - `=` / `-` — rain fall speed up / down
   - `.` / `,` — strike frequency up / down
   - `b` — force a lightning strike now
-  - `t c k F e s g f h a m` — toggle effects: `trails` (drop wakes),
-    `corona` (whole-screen tint on strike), `shake` (screen jolts),
-    `forks` (branched bolts + halo), `embers` (crawl along the struck row),
-    `splash` (impact ripples), `fronts` (sweeping gust lines), `fog`
-    (drifting dim band), `hail` (big bright drops), `aurora` (roiling
-    bands), `matrix` (green katakana rain)
+  - `r t c k F e s g f h a m` — toggle effects: `rain` (drops on/off),
+    `trails` (drop wakes), `corona` (whole-screen tint on strike),
+    `shake` (screen jolts), `forks` (branched bolts + halo), `embers`
+    (crawl along the struck row), `splash` (impact ripples), `fronts`
+    (sweeping gust bands), `fog` (drifting dim band), `hail` (big bright
+    drops), `aurora` (glowing curtains), `matrix` (green katakana rain)
   - `Ctrl+G h` again turns the panel (and the armed controls) off.
   With the panel hidden, the dials still work behind `Ctrl+G` (silently).
 - The terminal is restored on SIGTERM/SIGHUP/SIGINT too.

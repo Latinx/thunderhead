@@ -1,7 +1,7 @@
 //! Cell grid: the source of truth for what's on screen.
 //! The storm overlay never mutates this; it only affects rendering.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Color {
     Default,
     Indexed(u8),

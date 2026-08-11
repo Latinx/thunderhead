@@ -158,8 +158,8 @@ fn main() {
     let mut hud_lines: Vec<String> = vec![
         String::new(),
         String::new(), // fx line, filled once the storm exists
-        "t trails  c corona  k shake  F forks  e embers  s splash".to_string(),
-        "g fronts  f fog  h hail  a aurora  m matrix".to_string(),
+        "r rain  t trails  c corona  k shake  F forks  e embers".to_string(),
+        "s splash  g fronts  f fog  h hail  a aurora  m matrix".to_string(),
         "dials: ] / [ density  = / - speed  . / , strikes  b bolt   Ctrl+G h close".to_string(),
     ];
     hud_lines[1] = storm.fx_list();
