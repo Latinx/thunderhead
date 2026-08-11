@@ -338,6 +338,12 @@ impl Storm {
 
     /// The composite cell at (row, col): the storm's take on the base cell.
     pub fn overlay(&self, base: Cell, row: usize, col: usize) -> Option<Cell> {
+        // Never draw over a wide char's second column: a width-1 glyph placed
+        // on a continuation desyncs the diff (the wide char's write advances
+        // the terminal cursor two columns, misplacing the next run cell).
+        if base.width == 0 {
+            return None;
+        }
         // lightning flash: the whole jagged line appears at once, white-hot,
         // fading through the wake tiers; keeps the base background so it
         // doesn't punch through painted backgrounds (e.g. nvim)
@@ -453,5 +459,21 @@ mod tests {
         assert!(r2 >= g2 && g2 > 150);
         let (r3, _, _) = heat_color(0.55); // just past the midpoint: red-ish
         assert!(r3 == 255);
+    }
+}
+
+#[cfg(test)]
+mod wide_overlay_tests {
+    use super::*;
+
+    #[test]
+    fn overlay_skips_wide_continuation_cells() {
+        let mut s = Storm::new();
+        // a drop sitting exactly on the continuation column of a wide char
+        s.drops.push(Drop { col: 5.0, row: 0.0, speed: 1.0, glyph: '|', vertical: '.', leanable: false });
+        let cont = Cell { ch: ' ', fg: Color::Default, bg: Color::Default, bold: false, reverse: false, width: 0 };
+        assert_eq!(s.overlay(cont, 0, 5), None, "storm must not draw on a continuation");
+        let normal = Cell { ch: 'a', ..Cell::default() };
+        assert!(s.overlay(normal, 0, 5).is_some(), "storm draws on normal cells");
     }
 }
