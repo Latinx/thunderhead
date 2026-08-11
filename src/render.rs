@@ -244,7 +244,11 @@ impl Renderer {
                 let pos = format!(
                     "\x1b[{};{}H",
                     (r as i64 + 1 + dr).clamp(1, grid.rows as i64),
-                    (start as i64 + 1 + dc).clamp(1, grid.cols as i64)
+                    // the shake's dc offset must never push a run past the
+                    // last column — an overflow wraps and pushes a line into
+                    // the terminal's scrollback (every strike grew it by 3)
+                    (start as i64 + 1 + dc)
+                        .clamp(1, grid.cols as i64 - (c - start) as i64 + 1)
                 );
                 out.extend_from_slice(pos.as_bytes());
                 for cc in start..c {
