@@ -472,6 +472,28 @@ impl Storm {
         }
     }
 
+    /// Every HUD-toggleable effect as (key, name, enabled), in the exact
+    /// order the HUD keybind rows show them — the renderer colors each
+    /// key+name by its enabled state.
+    pub fn toggle_states(&self) -> Vec<(char, &'static str, bool)> {
+        vec![
+            ('r', "rain", self.fx_rain),
+            ('t', "trails", self.fx_trails),
+            ('c', "corona", self.fx_corona),
+            ('k', "shake", self.fx_shake),
+            ('F', "forks", self.fx_forks),
+            ('e', "embers", self.fx_embers),
+            ('s', "splash", self.fx_splash),
+            ('g', "fronts", self.fx_fronts),
+            ('f', "fog", self.fx_fog),
+            ('h', "hail", self.fx_hail),
+            ('a', "aurora", self.fx_aurora),
+            ('m', "matrix", self.fx_matrix),
+            ('M', "meteors", self.fx_meteor),
+            ('U', "ufo", self.fx_ufo),
+        ]
+    }
+
     /// 0..1 — how fresh the flash is (max wake intensity across the bolt).
     fn flash_level(&self) -> f64 {
         let Some(b) = &self.bolt else { return 0.0 };

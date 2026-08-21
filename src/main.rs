@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use crate::grid::Color;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use vte::Parser as VteParser;
 
@@ -94,12 +95,69 @@ fn dial(storm: &mut storm::Storm, b: u8) -> bool {
     true
 }
 
-/// Refresh the live panel lines: 0-3 status block, 5 fx list.
-fn refresh_hud(hud: &mut [String], storm: &storm::Storm) {
+/// HUD text color: the blue used for labels/status.
+const HUD_BLUE: Color = Color::Rgb(0x68, 0xA3, 0xE8);
+/// Toggle ON: green.
+const HUD_ON: Color = Color::Rgb(0x3F, 0xC9, 0x5B);
+/// Toggle OFF: red.
+const HUD_OFF: Color = Color::Rgb(0xF2, 0x5F, 0x5C);
+
+/// One HUD line as (char, fg) cells.
+fn hud_line(s: &str, fg: Color) -> Vec<(char, Color)> {
+    s.chars().map(|ch| (ch, fg)).collect()
+}
+
+/// Refresh the live panel lines: 0-3 status block, 4 swatch, 5 fx list,
+/// 7-14 keybind rows (each key+name colored by its toggle state).
+fn refresh_hud(hud: &mut [Vec<(char, Color)>], storm: &storm::Storm) {
     for (i, line) in storm.status_lines().iter().enumerate() {
-        hud[i] = line.clone();
+        hud[i] = hud_line(line, HUD_BLUE);
     }
-    hud[5] = storm.fx_list();
+    // 4: palette swatch — chips in the live storm colors
+    let mut swatch = hud_line("colors   ● ● ● ●", HUD_BLUE);
+    let sw = storm.swatch();
+    for (ci, entry) in swatch.iter_mut().enumerate() {
+        if entry.0 == '●' && ci >= 9 && (ci - 9) % 2 == 0 {
+            let (r, g, b) = sw[(ci - 9) / 2];
+            entry.1 = Color::Rgb(r, g, b);
+        }
+    }
+    hud[4] = swatch;
+    hud[5] = hud_line(&storm.fx_list(), HUD_BLUE);
+
+    // 7-14: keybind rows, colored by state. Each pair is `key name` left
+    // (padded to 12) + `key name` right; the last row has one token.
+    let st = storm.toggle_states();
+    let row = |hud: &mut [Vec<(char, Color)>], idx: usize, a: usize, b: Option<usize>| {
+        let mut cells = Vec::with_capacity(24);
+        for (i, tok) in [Some(a), b].into_iter().flatten().enumerate() {
+            let (key, name, on) = st[tok];
+            let fg = if on { HUD_ON } else { HUD_OFF };
+            let mut tok_cells = hud_line(&format!("{key} {name}"), fg);
+            if i == 0 {
+                while tok_cells.len() < 12 {
+                    tok_cells.push((' ', HUD_BLUE));
+                }
+            }
+            cells.extend(tok_cells);
+        }
+        hud[idx] = cells;
+    };
+    row(hud, 7, 0, Some(1));   // r rain   t trails
+    row(hud, 8, 2, Some(3));   // c corona k shake
+    row(hud, 9, 4, Some(5));   // F forks  e embers
+    row(hud, 10, 6, Some(7));  // s splash g fronts
+    row(hud, 11, 8, Some(9));  // f fog    h hail
+    row(hud, 12, 10, Some(11)); // a aurora m matrix
+    // 13: M meteors + C randomize — C is a one-shot, always blue
+    let mut mrow = hud_line(&format!("M meteors"), if st[12].2 { HUD_ON } else { HUD_OFF });
+    while mrow.len() < 12 {
+        mrow.push((' ', HUD_BLUE));
+    }
+    mrow.extend(hud_line("C randomize", HUD_BLUE));
+    hud[13] = mrow;
+    // 14: U ufo
+    hud[14] = hud_line(&format!("U ufo"), if st[13].2 { HUD_ON } else { HUD_OFF });
 }
 
 #[test]
@@ -181,28 +239,29 @@ fn main() {
     let mut last_mouse_sgr = false;
     // The HUD panel: a vertical control deck, floats mid-right of the screen.
     // Line indexes are stable: 0-3 status, 4 palette swatch, 5 fx, 6-14
-    // toggles, 15 dials, 16-18 blank/dial-footer.
-    let mut hud_lines: Vec<String> = vec![
-        String::new(), // 0: storm  rain  45%
-        String::new(), // 1: speed
-        String::new(), // 2: strike
-        String::new(), // 3: meteor
-        "colors   ● ● ● ●".to_string(), // 4: live palette swatch
-        String::new(), // 5: fx list
-        String::new(), // 6: blank
-        "r rain      t trails".to_string(), // 7
-        "c corona    k shake".to_string(), // 8
-        "F forks     e embers".to_string(), // 9
-        "s splash    g fronts".to_string(), // 10
-        "f fog       h hail".to_string(), // 11
-        "a aurora    m matrix".to_string(), // 12
-        "M meteors   C randomize".to_string(), // 13
-        "U ufo".to_string(), // +1: ufo row
-        String::new(), // blank
-        "1 / 2 meteor rate   3 / 4 meteor size".to_string(), // dials
-        "] / [ density       = / - speed".to_string(), // 16
-        ". / , strikes       b bolt".to_string(), // 17
-        "Ctrl+G h close".to_string(), // 18
+    // toggles, 15 dials, 16-18 blank/dial-footer. Toggle rows are rebuilt
+    // by refresh_hud with per-key colors; blanks/dials are static.
+    let mut hud_lines: Vec<Vec<(char, Color)>> = vec![
+        Vec::new(), // 0: storm  rain  45%
+        Vec::new(), // 1: speed
+        Vec::new(), // 2: strike
+        Vec::new(), // 3: meteor
+        Vec::new(), // 4: palette swatch (refresh_hud paints the chips)
+        Vec::new(), // 5: fx list
+        Vec::new(), // 6: blank
+        Vec::new(), // 7-14: toggle rows, colored by state
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(), // blank
+        hud_line("1 / 2 meteor rate   3 / 4 meteor size", HUD_BLUE), // dials
+        hud_line("] / [ density       = / - speed", HUD_BLUE), // 16
+        hud_line(". / , strikes       b bolt", HUD_BLUE), // 17
+        hud_line("Ctrl+G h close", HUD_BLUE), // 18
     ];
     refresh_hud(&mut hud_lines, &storm);
 
