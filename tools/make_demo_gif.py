@@ -26,16 +26,17 @@ import copy
 
 from PIL import Image, ImageDraw, ImageFont
 
-ROWS, COLS = 40, 120
-FPS = 60
+ROWS, COLS = 40, 128
+FPS = 30
 CAPTURE_S = 18
 BIN = os.path.expanduser("~/.local/bin/thunderhead")
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
-CELL_W, CELL_H = 10, 20
-FONT_PX = 16
+CELL_W, CELL_H = 15, 30
+FONT_PX = 24
 
 ART_PATH = "/tmp/thunderhead_art.txt"
 NVIM_FILE = "/tmp/thunderhead_demo.txt"
+NVIM_SRC = os.path.expanduser("~/repository/nvim.md")
 ART_ASSET = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storm_art.txt")
 
 # --- xterm 256-color approximation (16 base + 6x6x6 cube + grayscale) --------
@@ -66,17 +67,9 @@ def xterm_rgb(n):
 def write_scene_files():
     with open(ART_ASSET) as src, open(ART_PATH, "w") as dst:
         dst.write(src.read())
-    with open(NVIM_FILE, "w") as f:
-        f.write(
-            "// thunderhead.rs — the storm lives in your terminal\n"
-            "fn main() {\n"
-            "    let mut storm = Storm::new();\n"
-            "    loop {\n"
-            "        storm.tick(dt);\n"
-            "        render(&storm);\n"
-            "    }\n"
-            "}\n"
-        )
+    # the real drills file, copied so the original is never touched
+    with open(NVIM_SRC) as src, open(NVIM_FILE, "w") as dst:
+        dst.write(src.read())
 
 
 # --- ANSI stream -> grid rasterizer ------------------------------------------
@@ -250,6 +243,11 @@ def capture_frames():
             sent[t] = True
 
     while time.time() < end:
+        # rain density up to ~85% so the storm reads clearly on camera
+        send(0.8, "\x07]")
+        send(1.0, "\x07]")
+        send(1.2, "\x07]")
+        send(1.4, "\x07]")
         send(1.2, "cat " + ART_PATH)                       # fullscreen art
         send(4.5, "nvim " + NVIM_FILE)                       # their real nvim
         send(12.0, "\x1b:q")                                # quit nvim
