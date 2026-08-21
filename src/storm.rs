@@ -259,7 +259,7 @@ impl Storm {
             strike_flash: 1.0,
             strike_corona: 1.0,
             last_strike_col: 0,
-            // default on: the storm-feel set; fog/hail/aurora/matrix opt-in
+            // default on: the storm-feel set; fronts/fog/hail/aurora/matrix opt-in
             fx_rain: true,
             fx_trails: true,
             fx_corona: true,
@@ -268,7 +268,7 @@ impl Storm {
             fx_embers: true,
             fx_forks: true,
             fx_splash: true,
-            fx_fronts: true,
+            fx_fronts: false,
             fx_hail: false,
             fx_aurora: false,
             fx_matrix: false,
