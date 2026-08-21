@@ -549,8 +549,10 @@ mod scroll_tests {
     }
 }
 
+#[cfg(test)]
 mod wrap_tests {
     use super::*;
+    
 
     #[test]
     fn autowrap_arms_only_at_last_column() {
